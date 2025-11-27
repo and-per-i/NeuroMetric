@@ -1,0 +1,12 @@
+# Ignora le cartelle dei dati pesanti
+data/
+processed/
+dataset/
+
+# Ignora file video e modelli pesanti ovunque siano
+*.mp4
+*.avi
+*.zip
+*.tar.gz
+*.npy
+*.pth
