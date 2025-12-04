@@ -2,6 +2,7 @@
 data/
 processed/
 dataset/
+results/
 
 # Ignora file video e modelli pesanti ovunque siano
 *.mp4
