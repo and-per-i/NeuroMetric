@@ -1,21 +1,8 @@
 import torch
-import os
-import sys
 
-# Se siamo su Colab, montiamo il drive e usiamo quel percorso
-if 'google.colab' in sys.modules:
-    from google.colab import drive
-    drive.mount('/content/drive')
-    
-    # Percorso assoluto su Colab
-    BASE_DIR = "/content/drive/MyDrive/Neurometric"
-    RAW_DATA_DIR = os.path.join(BASE_DIR, "data/raw")
-    MODEL_SAVE_PATH = os.path.join(BASE_DIR, "models/neurometric_lstm_v2.pth")
-
-else:
-    # Percorso locale (sul tuo PC)
-    RAW_DATA_DIR = "data/raw"
-    MODEL_SAVE_PATH = "models/neurometric_lstm_v2.pth"
+# PERCORSI
+RAW_DATA_DIR = "data/raw"
+MODEL_SAVE_PATH = "neurometric_lstm.pth"
 
 # --- MAPPA ANATOMICA AD ALTA DEFINIZIONE (INDICI MEDIAPIPE) ---
 # Questi indici coprono il contorno completo, non solo i cardinali.

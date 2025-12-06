@@ -32,10 +32,10 @@ def estrai_punti_da_video(video_path):
         
         if results.multi_face_landmarks:
             frame_data = []
-            # --- MODIFICA CHIAVE: Loop su TUTTI i punti ---
+            # Estrae i punti [x, y] per ogni landmark tracciato
             for idx in config.TRACKED_LANDMARKS:
                 lm = results.multi_face_landmarks[0].landmark[idx]
-                frame_data.extend([lm.x, lm.y]) # Appiattisce [x1, y1, x2, y2...]
+                frame_data.extend([lm.x, lm.y]) 
             
             sequence.append(frame_data)
             
@@ -52,7 +52,6 @@ def genera_dataset_da_video():
     y_list = []
     
     injector = AnomalyInjector(fps=30)
-
     files = [f for f in os.listdir(config.RAW_DATA_DIR) if f.endswith(".mp4")]
     
     if not files:
@@ -66,10 +65,13 @@ def genera_dataset_da_video():
         # Controllo dimensionale
         expected_dim = config.INPUT_SIZE
         if seq_reale.shape[1] != expected_dim:
-            print(f"⚠️ ERRORE DIMENSIONI: Il video ha dato {seq_reale.shape[1]} feature, ma ne servono {expected_dim}.")
+            print(f"⚠️ ERRORE DIMENSIONI: {video_file} ha {seq_reale.shape[1]} features, servono {expected_dim}.")
             continue
         
         if len(seq_reale) < config.SEQUENCE_LENGTH: continue
+
+        # Numero di landmark tracciati (ogni landmark ha x e y, quindi dividiamo per 2)
+        num_landmarks = expected_dim // 2
 
         for i in range(0, len(seq_reale) - config.SEQUENCE_LENGTH, 15):
             window = seq_reale[i : i + config.SEQUENCE_LENGTH]
@@ -78,31 +80,56 @@ def genera_dataset_da_video():
             X_list.append(window)
             y_list.append(0) 
             
+            # Preparazione per l'iniezione anomalie: Reshape in (30, N_Punti, 2)
+            # Questo ci permette di lavorare sui singoli punti se necessario
+            window_3d = window.reshape(config.SEQUENCE_LENGTH, num_landmarks, 2)
+
             # --- CLASSE 1: TREMORE ---
+            # Applichiamo il tremore a TUTTI i landmark tracciati
+            aug_tremor = window_3d.copy()
             freq_tremor = np.random.uniform(4.0, 6.0)
-            X_list.append(injector.add_tremor(window, freq=freq_tremor))
+            amp_tremor = np.random.uniform(0.015, 0.025)
+            for k in range(num_landmarks):
+                aug_tremor[:, k, :] = injector.add_tremor(aug_tremor[:, k, :], freq=freq_tremor, amplitude=amp_tremor)
+            X_list.append(aug_tremor.reshape(config.SEQUENCE_LENGTH, -1)) # Flatten back
             y_list.append(1)
 
             # --- CLASSE 2: TIC ---
-            X_list.append(injector.add_tic(window))
+            aug_tic = window_3d.copy()
+            amp_tic = np.random.uniform(0.04, 0.08)
+            # Il tic colpisce spesso un punto specifico o tutti insieme. Qui lo applichiamo a tutti sincrono.
+            for k in range(num_landmarks):
+                aug_tic[:, k, :] = injector.add_tic(aug_tic[:, k, :], amplitude=amp_tic)
+            X_list.append(aug_tic.reshape(config.SEQUENCE_LENGTH, -1))
             y_list.append(2)
 
             # --- CLASSE 3: IPOMIMIA ---
+            # Hypomimia lavora bene su tutto l'array 3D direttamente (calcola la media globale)
             severity = np.random.uniform(0.6, 0.9)
-            X_list.append(injector.add_hypomimia(window, severity=severity))
+            aug_hypo = injector.add_hypomimia(window_3d, severity=severity)
+            X_list.append(aug_hypo.reshape(config.SEQUENCE_LENGTH, -1))
             y_list.append(3)
 
             # --- CLASSE 4: PARESI ---
-            X_list.append(injector.add_paresis(window))
+            # Anche paresi può essere iterata per applicare il 'droop' (caduta) a tutti i punti
+            aug_paresis = window_3d.copy()
+            droop = np.random.uniform(0.02, 0.05)
+            for k in range(num_landmarks):
+                aug_paresis[:, k, :] = injector.add_paresis(aug_paresis[:, k, :], droop_factor=droop)
+            X_list.append(aug_paresis.reshape(config.SEQUENCE_LENGTH, -1))
             y_list.append(4)
 
-            # --- CLASSE 5: DISCINESIA ---
-            freq_dys = np.random.uniform(1.0, 3.0)
-            X_list.append(injector.add_dyskinesia(window, freq=freq_dys))
+            # --- CLASSE 5: DISCINESIA (NUOVA LOGICA) ---
+            # La funzione add_dyskinesia che abbiamo scritto nel nuovo anomaly_utils
+            # gestisce GIA' l'input 3D internamente.
+            # NOTA: Passiamo 'intensity', NON 'freq' (la frequenza è interna e complessa ora)
+            intensity_dys = np.random.uniform(0.03, 0.06)
+            aug_dys = injector.add_dyskinesia(window_3d, intensity=intensity_dys)
+            X_list.append(aug_dys.reshape(config.SEQUENCE_LENGTH, -1))
             y_list.append(5)
 
     X_final = np.array(X_list, dtype=np.float32)
     y_final = np.array(y_list, dtype=np.int64)
     
-    print(f"DATASET GENERATO: {len(X_final)} campioni.")
+    print(f"DATASET GENERATO: {len(X_final)} campioni (Shape X: {X_final.shape}).")
     return X_final, y_final
