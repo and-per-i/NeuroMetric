@@ -11,11 +11,18 @@ import config
 from model import NeuroLSTM
 from data_gen import genera_dataset_da_video
 
+# ... (omessi import)
+
 def train_model():
-    print(f"--- AVVIO TRAINING NEUROMETRIC MODEL 2.0 ---")
+    # Riga 15 (Aggiornamento titolo da 2.0 a 3.0)
+    print(f"--- AVVIO TRAINING NEUROMETRIC MODEL 3.0 ---") 
     print(f"Device: {config.DEVICE}")
-    print(f"Input Size: {config.INPUT_SIZE} features (coordinate x,y)")
+    # Riga 17 (Descrizione corretta dell'Input)
+    print(f"Input Size: {config.INPUT_SIZE} features (Posizione + Velocità)") 
     print(f"Classes: {config.NUM_CLASSES}")
+
+    # 1. GENERAZIONE DATI (ETL)
+    # ... il resto del codice rimane identico e funzionale
 
     # 1. GENERAZIONE DATI (ETL)
     print("\n[FASE 1] Generazione Dataset Sintetico...")
