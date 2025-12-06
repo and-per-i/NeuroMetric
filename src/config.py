@@ -41,7 +41,7 @@ for area in ANATOMY_MAP.values():
 # PARAMETRI DATI
 SEQUENCE_LENGTH = 30  
 # Input Size aumenta: ora sono (20+16+16+10) * 2 = 124 valori per frame
-INPUT_SIZE = len(TRACKED_LANDMARKS) * 2 
+INPUT_SIZE = len(TRACKED_LANDMARKS) * 4
 NUM_CLASSES = 6       
 
 # PARAMETRI TRAINING
