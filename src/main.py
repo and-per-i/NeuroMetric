@@ -14,10 +14,12 @@ sys.path.append(current_dir)
 try:
     import config
     from model import NeuroLSTM
+    from data_gen import get_kinematic_features # NUOVO: Importa la funzione di normalizzazione cinematica
 except ImportError:
     sys.path.append(os.path.join(os.getcwd(), 'src'))
     import config
     from model import NeuroLSTM
+    from data_gen import get_kinematic_features # NUOVO: Importa la funzione di normalizzazione cinematica
 
 # --- MAPPA CLASSI ---
 CLASS_MAP = {
@@ -37,6 +39,7 @@ MIN_CLIP_FRAMES = 20
 def create_session_structure(project_root, video_filename):
     base_name = os.path.splitext(os.path.basename(video_filename))[0]
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    # Usa il nome del video come directory
     session_dir = os.path.join(project_root, "results", f"{base_name}_{timestamp}")
     clips_dir = os.path.join(session_dir, "clips")
     os.makedirs(clips_dir, exist_ok=True)
@@ -96,7 +99,7 @@ def generate_html_report(filepath, video_name, total_frames, fps, stats, events)
             {stat_html}
             <h3>Eventi</h3>
             <table>
-                <thead><tr><th>ID</th><th>Sintomo</th><th>Zona</th><th>Inizio</th><th>Confidenza</th><th>Clip</th></tr></thead>
+                <thead><tr><th>ID</th><th>Sintomo</th><th>Zona</th><th>Inizio</th><th>Durata</th><th>Confidenza</th><th>Clip</th></tr></thead>
                 <tbody>{rows_html}</tbody>
             </table>
         </div>
@@ -106,6 +109,10 @@ def generate_html_report(filepath, video_name, total_frames, fps, stats, events)
     with open(filepath, "w", encoding="utf-8") as f: f.write(html_content)
 
 def get_active_zone_indices(pred_class, anatomy_map):
+    # Logica per l'estrazione della zona è complessa e richiede aggiornamento completo
+    # Manteniamo la logica esistente o semplifichiamo per il momento.
+    # Visto che la V3.0 si basa sul movimento puro, find_dynamic_zone è più accurata.
+    # Manteniamo la struttura esistente solo per coerenza, anche se find_dynamic_zone è la chiave.
     label = CLASS_MAP.get(pred_class, "IGNOTO")
     if label in ["TREMORE", "DISCINESIA"]:
         return anatomy_map["BOCCA"], "Regione Periorale"
@@ -118,22 +125,38 @@ def get_active_zone_indices(pred_class, anatomy_map):
     return [], "Nessuna"
 
 def find_dynamic_zone(buffer, anatomy_map):
+    """
+    Trova la zona anatomica con la maggiore deviazione standard (movimento).
+    Il buffer contiene solo la POSIZIONE stabilizzata (la prima metà delle feature).
+    """
     data = np.array(buffer)
     max_score = -1
     best_zone_name = "Globale"
     best_indices = []
     current_idx = 0
     
+    # Calcola il numero totale di feature di POSIZIONE tracciate (N_Punti * 2)
+    # Non possiamo usare config.INPUT_SIZE (che è N*4) qui.
+    pos_feature_size = config.INPUT_SIZE // 2
+    
+    # Il buffer in ingresso QUI contiene solo la posizione, quindi la sua larghezza
+    # sarà N_Punti * 2, anche se l'LSTM ne usa N*4.
+    
     for zone_name, indices in anatomy_map.items():
         n_points = len(indices)
-        n_features = n_points * 2
+        n_features = n_points * 2 # Features di POSIZIONE per questa zona (x, y)
+        
+        # Estrai i dati di posizione della zona dal buffer
         zone_data = data[:, current_idx : current_idx + n_features]
-        movement_score = np.mean(np.std(zone_data, axis=0))
+        
+        # Calcolo del punteggio di movimento: Deviazione standard (varianza) attraverso i frame (asse 0) e media sui punti
+        movement_score = np.mean(np.std(zone_data, axis=0)) 
         
         if movement_score > max_score:
             max_score = movement_score
             best_zone_name = zone_name
             best_indices = indices
+            
         current_idx += n_features
         
     return best_indices, best_zone_name
@@ -143,7 +166,7 @@ def main(video_filename):
     project_root = os.path.dirname(current_dir)
     possible_paths = [
         os.path.join(project_root, "data", "real_test_videos", video_filename),
-        os.path.join(project_root, "downloaded_videos", video_filename),
+        os.path.join(project_root, "data", "raw", video_filename), # Aggiunto percorso /data/raw
         os.path.join(project_root, video_filename)
     ]
     video_path = next((p for p in possible_paths if os.path.exists(p)), None)
@@ -152,9 +175,9 @@ def main(video_filename):
         print(f"❌ ERRORE: Video '{video_filename}' non trovato.")
         return
 
-    model_path = os.path.join(project_root, "neurometric_lstm.pth")
+    model_path = os.path.join(project_root, config.MODEL_SAVE_PATH) # Usa la variabile config
     if not os.path.exists(model_path):
-        print(f"❌ ERRORE: Modello mancante.")
+        print(f"❌ ERRORE: Modello '{config.MODEL_SAVE_PATH}' mancante. Assicurati che il training sia finito.")
         return
 
     session_dir, clips_dir = create_session_structure(project_root, video_filename)
@@ -166,11 +189,13 @@ def main(video_filename):
     try:
         model.load_state_dict(torch.load(model_path, map_location=device))
         model.eval()
-    except RuntimeError:
-        print("❌ ERRORE: Dimensioni modello non corrispondenti.")
+        print("✅ Modello V3.0 caricato con successo.")
+    except RuntimeError as e:
+        print(f"❌ ERRORE CRITICO: Dimensioni modello non corrispondenti. (V2.0 vs V3.0?)")
+        print(f"Dettaglio: {e}")
         return
 
-    # 3. VIDEO
+    # 3. VIDEO E PROCESSO
     cap = cv2.VideoCapture(video_path)
     success, first_frame = cap.read()
     if not success: return
@@ -179,23 +204,17 @@ def main(video_filename):
     h, w, _ = first_frame.shape
     fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
     
-    # Tenta Codec WEBM (VP8) per compatibilità browser, fallback a MJPG
-    # Su Windows, 'VP80' potrebbe richiedere DLL specifiche. Se fallisce, usa 'MJPG' e .avi
     fourcc = cv2.VideoWriter_fourcc(*'VP80') 
     ext = ".webm"
     
-    # Test veloce se il codec funziona (opzionale, ma sicuro)
-    # Se non ti fidi del codec VP8 su Windows, cambia qui sotto in 'MJPG' e '.avi'
-    # fourcc = cv2.VideoWriter_fourcc(*'MJPG')
-    # ext = ".avi"
-    
     out_full = cv2.VideoWriter(os.path.join(session_dir, f"FULL_{os.path.basename(video_filename)}{ext}"), 
-                               fourcc, fps, (w, h))
+                             fourcc, fps, (w, h))
 
     mp_face_mesh = mp.solutions.face_mesh
     face_mesh = mp_face_mesh.FaceMesh(max_num_faces=1, refine_landmarks=True, min_detection_confidence=0.5)
     
     buffer = deque(maxlen=config.SEQUENCE_LENGTH)
+    prev_landmarks_normalized = None # Memoria per calcolare la velocità nel main.py
     
     stats_counter = {v: 0 for k, v in CLASS_MAP.items()}
     clip_events = []
@@ -222,35 +241,60 @@ def main(video_filename):
 
         if results.multi_face_landmarks:
             face_landmarks = results.multi_face_landmarks[0]
-            frame_features = []
             
+            # --- AGGIORNAMENTO V3.0: FEATURE EXTRACTION ---
+            # 1. Normalizzazione Cinematica (Posizione stabilizzata)
+            current_lms_normalized = get_kinematic_features(
+                face_landmarks.landmark, 
+                config.TRACKED_LANDMARKS
+            )
+            
+            # 2. Calcolo Velocità (Dinamica)
+            if prev_landmarks_normalized is not None:
+                velocity = current_lms_normalized - prev_landmarks_normalized
+            else:
+                velocity = np.zeros_like(current_lms_normalized)
+                
+            prev_landmarks_normalized = current_lms_normalized.copy()
+            
+            # 3. Vettore finale: [Posizione, Velocità]
+            frame_features_vector = np.concatenate([
+                current_lms_normalized.flatten(), 
+                velocity.flatten()
+            ])
+            
+            # Disegno dei landmark GREZZI (per visualizzazione)
             for idx in config.TRACKED_LANDMARKS:
                 lm = face_landmarks.landmark[idx]
-                frame_features.extend([lm.x, lm.y])
                 cx, cy = int(lm.x * w), int(lm.y * h)
                 cv2.circle(frame, (cx, cy), 1, (255, 255, 0), -1)
-
-            buffer.append(frame_features)
+            
+            buffer.append(frame_features_vector)
 
             if len(buffer) == config.SEQUENCE_LENGTH:
+                # 4. Inferenza LSTM
                 input_tensor = torch.tensor([list(buffer)], dtype=torch.float32).to(device)
                 with torch.no_grad():
                     out = model(input_tensor)
                     probs = torch.softmax(out, dim=1)
                     conf, pred = torch.max(probs, 1)
                     
-                    pred_idx = pred.item()
-                    current_conf = conf.item()
+                pred_idx = pred.item()
+                current_conf = conf.item()
 
                 current_label = CLASS_MAP.get(pred_idx, "?")
                 
                 if pred_idx != 0 and current_conf > CONFIDENCE_THRESHOLD:
                     active_anomaly = True
                     
-                    # Localizzazione dinamica
-                    zone_indices, current_zone_name = find_dynamic_zone(buffer, config.ANATOMY_MAP)
+                    # 5. Localizzazione Dinamica
+                    # Estrai solo la Posizione (la prima metà) dal buffer per l'analisi spaziale
+                    pos_only_buffer = [f[:config.INPUT_SIZE // 2] for f in buffer] 
+                    
+                    zone_indices, current_zone_name = find_dynamic_zone(pos_only_buffer, config.ANATOMY_MAP)
                     
                     if zone_indices:
+                        # Calcola il riquadro di disegno usando i landmark grezzi per avere le coordinate originali
                         xs = [face_landmarks.landmark[i].x * w for i in zone_indices]
                         ys = [face_landmarks.landmark[i].y * h for i in zone_indices]
                         if xs and ys:
@@ -267,6 +311,7 @@ def main(video_filename):
 
         # Gestione Clip
         if active_anomaly:
+            # ... (logica di registrazione clip invariata)
             patience = 0
             if not is_recording_clip:
                 is_recording_clip = True
@@ -299,7 +344,8 @@ def main(video_filename):
                 else:
                     try: os.remove(os.path.join(clips_dir, current_event['filename']))
                     except: pass
-
+        
+        # Aggiornamento contatore statistico
         stats_counter[current_label] = stats_counter.get(current_label, 0) + 1
         
         out_full.write(frame)
@@ -308,6 +354,7 @@ def main(video_filename):
         if cv2.waitKey(1) & 0xFF == ord('q'): break
         frame_idx += 1
 
+    # Cleanup finale
     if is_recording_clip and clip_writer: clip_writer.release()
     cap.release()
     out_full.release()
@@ -318,5 +365,8 @@ def main(video_filename):
     print(f"\n✅ REPORT GENERATO: {html_file}")
 
 if __name__ == "__main__":
-    target = sys.argv[1] if len(sys.argv) > 1 else "tic_billie_eilish.mp4"
-    main(target)
+    parser = argparse.ArgumentParser(description="Esegui l'inferenza del modello Neurometric su un video.")
+    parser.add_argument("video", type=str, nargs='?', default="tic_billie_eilish.mp4", 
+                        help="Nome del file video da analizzare (es. test.mp4).")
+    args = parser.parse_args()
+    main(args.video)
