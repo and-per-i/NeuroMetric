@@ -6,28 +6,21 @@ Utilizzando una pipeline di visione artificiale basata su **MediaPipe** e una re
 
 ---
 
-## ✨ Caratteristiche Tecniche Principali (V3.0)
+## ✨ Feature Implementate (V3.0)
 
-La versione 3.0 risolve le criticità di accuratezza introducendo il pre-processing cinematico e l'analisi dinamica.
+L'attuale versione (V3.0) introduce tecniche avanzate di pre-processing per migliorare la robustezza del modello rispetto alle versioni precedenti.
 
-### 1. Normalizzazione Cinematica (Stabilizzazione Testa)
-Questa è la modifica strutturale chiave. Il sistema applica una trasformazione geometrica rigida (Traslazione, Rotazione, Scala) per **ancorare il volto** e **allineare gli occhi orizzontalmente**.
-* **Obiettivo:** Isolare il movimento muscolare puro.
-* **Beneficio:** Elimina i **falsi positivi di Paresi** e Ipomimia causati dalla rotazione o dall'inclinazione della testa del paziente.
+### 1. Normalizzazione Cinematica (Stabilizzazione)
+Per risolvere il problema del rumore causato dai movimenti della testa, è stata implementata una trasformazione geometrica rigida.
+* **Tecnica:** Ancoraggio del volto e allineamento orizzontale degli occhi frame-by-frame.
+* **Risultato:** Elimina i bias posizionali (es. falsi positivi di Ipomimia dovuti alla testa inclinata), isolando il movimento muscolare puro.
 
-### 2. Analisi Dinamica
-Il vettore di input per l'LSTM è stato ampliato per includere la dinamica temporale.
-* **Input V3.0:** Vettore di Posizione (Normalizzata) + **Vettore di Velocità** ($\Delta x, \Delta y$).
-* **Beneficio:** Potenziamento della distinzione tra movimenti veloci e impulsivi (Tic) e la staticità anomala (Ipomimia).
+### 2. Analisi Dinamica (Velocity Features)
+L'architettura LSTM ora riceve in input anche le derivate temporali, non solo le posizioni.
+* **Input Vector:** Coordinate $(x, y)$ + **Velocità** $(\Delta x, \Delta y)$.
+* **Risultato:** Il modello distingue meglio tra movimenti rapidi (Tic) e assenza di movimento (Ipomimia).
 
 ### 3. Stack Tecnologico
-
-* **Core Model:** PyTorch (LSTM)
-* **Feature Extraction:** MediaPipe (Face Mesh), OpenCV
-* **Linguaggio:** Python
-* **Ambiente:** Google Colab
-
----
-
-## 🚀 Prossimi Passi
-Per eseguire il training, assicurarsi che `config.INPUT_SIZE` sia impostato su `N_LANDMARKS * 4` e che le credenziali GitHub siano state configurate in ambiente Colab.
+* **Framework:** PyTorch, MediaPipe, OpenCV
+* **Modello:** LSTM (Long Short-Term Memory)
+* **Ambiente:** Google Colab / Python
