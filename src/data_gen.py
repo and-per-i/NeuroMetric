@@ -7,56 +7,41 @@ from anomaly_utils import AnomalyInjector
 
 def get_kinematic_features(landmarks, tracked_indices):
     """
-    CORE V3.1: Normalizzazione Cinematica (Rotazione DISABILITATA).
-    Trasforma i landmark grezzi in coordinate relative al naso,
-    ma MANTIENE la rotazione della testa per rilevare i Tic del collo.
+    Estrae le feature spaziali (Posizione) normalizzate sul naso.
+    Restituisce anche la posizione GREZZA del naso per il calcolo globale.
     """
-    # Converti tutti i landmark in numpy array (468, 2)
     all_lms = np.array([[lm.x, lm.y] for lm in landmarks])
     
-    # --- STEP 1: ANCORAGGIO (Translation) ---
-    # Sottraiamo il naso (Landmark 1) da tutti i punti.
+    # 1. Coordinate Naso (per ancoraggio e per velocità globale)
     nose_tip = all_lms[1]
+    
+    # 2. Ancoraggio (Sottrazione naso)
     centered_lms = all_lms - nose_tip
     
-    # --- STEP 2: RADDRIZZAMENTO (Rotation) ---
-    # MODIFICA V3.1: DISABILITATO per preservare i movimenti del collo (Tic).
-    rotated_lms = centered_lms 
+    # 3. Scala (Distanza occhi)
+    left_eye = all_lms[33]
+    right_eye = all_lms[263]
+    dist_eyes = np.linalg.norm(right_eye - left_eye)
+    scale_factor = dist_eyes if dist_eyes > 0 else 1.0
     
-    # --- STEP 3: SCALA (Scaling) ---
-    # Normalizziamo in base alla distanza interpupillare per invarianza allo zoom.
-    left_eye_orig = all_lms[33]
-    right_eye_orig = all_lms[263]
-    dist_eyes = np.linalg.norm(right_eye_orig - left_eye_orig)
-    
-    if dist_eyes > 0:
-        normalized_lms = rotated_lms / dist_eyes
-    else:
-        normalized_lms = rotated_lms
-
-    # Estraiamo solo i punti tracciati definiti nel config
+    normalized_lms = centered_lms / scale_factor
     final_features = normalized_lms[tracked_indices]
     
-    return final_features
+    return final_features, nose_tip, scale_factor
 
 def estrai_punti_da_video(video_path):
     """
-    Legge il video, applica la normalizzazione V3.1 e calcola la VELOCITÀ.
-    Output Shape: (Frames, N_Punti * 4) -> [Posizioni(x,y)..., Velocità(vx,vy)...]
+    V3.2: Estrae [Posizione Locale, Velocità Locale, VELOCITÀ TESTA].
     """
-    print(f"Processing: {os.path.basename(video_path)}...")
+    print(f"Processing V3.2: {os.path.basename(video_path)}...")
     cap = cv2.VideoCapture(video_path)
     
     mp_face_mesh = mp.solutions.face_mesh
-    face_mesh = mp_face_mesh.FaceMesh(
-        static_image_mode=False, 
-        max_num_faces=1, 
-        refine_landmarks=True,
-        min_detection_confidence=0.5
-    )
+    face_mesh = mp_face_mesh.FaceMesh(static_image_mode=False, max_num_faces=1, refine_landmarks=True, min_detection_confidence=0.5)
     
     sequence = []
-    prev_landmarks = None # Memoria per calcolare la velocità
+    prev_local_lms = None
+    prev_nose_pos = None
     
     while cap.isOpened():
         success, frame = cap.read()
@@ -66,47 +51,72 @@ def estrai_punti_da_video(video_path):
         results = face_mesh.process(image_rgb)
         
         if results.multi_face_landmarks:
-            # 1. Ottieni coordinate (senza correzione rotazione)
-            current_lms = get_kinematic_features(
+            # 1. Ottieni feature locali e dati globali
+            current_local_lms, current_nose, scale = get_kinematic_features(
                 results.multi_face_landmarks[0].landmark, 
                 config.TRACKED_LANDMARKS
             )
             
-            # 2. Calcola Velocità (Dinamica)
-            if prev_landmarks is not None:
-                velocity = current_lms - prev_landmarks
+            # 2. Calcola Velocità LOCALE (Micro-espressioni)
+            if prev_local_lms is not None:
+                velocity_local = current_local_lms - prev_local_lms
             else:
-                velocity = np.zeros_like(current_lms)
+                velocity_local = np.zeros_like(current_local_lms)
             
-            prev_landmarks = current_lms.copy()
+            # 3. Calcola Velocità GLOBALE TESTA (Tic collo/Dondolio)
+            # La normalizziamo con la scala per renderla indipendente dallo zoom
+            if prev_nose_pos is not None:
+                velocity_head = (current_nose - prev_nose_pos) / scale
+            else:
+                velocity_head = np.array([0.0, 0.0])
+                
+            # Aggiorna stati precedenti
+            prev_local_lms = current_local_lms.copy()
+            prev_nose_pos = current_nose.copy()
             
-            # 3. Costruisci il vettore finale: [Posizioni, Velocità]
-            frame_vector = np.concatenate([current_lms.flatten(), velocity.flatten()])
+            # 4. Costruisci vettore: [Pos_Loc(flat), Vel_Loc(flat), Vel_Head(2)]
+            frame_vector = np.concatenate([
+                current_local_lms.flatten(), 
+                velocity_local.flatten(),
+                velocity_head.flatten()
+            ])
             
             sequence.append(frame_vector)
             
     cap.release()
     return np.array(sequence, dtype=np.float32)
 
-def recalculate_velocity(position_sequence):
+def recalculate_velocity_v32(augmented_pos_3d, original_full_window):
     """
-    Ricalcola la velocità dopo aver iniettato anomalie sintetiche.
-    Necessario perché add_tremor/add_tic modificano solo la posizione.
+    Ricalcola la velocità locale dopo l'augmentation, ma MANTIENE la velocità della testa originale.
     """
-    velocities = np.zeros_like(position_sequence)
-    # vel[t] = pos[t] - pos[t-1]
-    velocities[1:] = position_sequence[1:] - position_sequence[:-1]
+    seq_len = augmented_pos_3d.shape[0]
     
-    flattened_seq = []
-    for i in range(len(position_sequence)):
-        pos_flat = position_sequence[i].flatten()
-        vel_flat = velocities[i].flatten()
-        flattened_seq.append(np.concatenate([pos_flat, vel_flat]))
+    # 1. Appiattisci le nuove posizioni
+    new_pos_flat = augmented_pos_3d.reshape(seq_len, -1)
+    
+    # 2. Calcola nuove velocità locali
+    new_vel_local = np.zeros_like(new_pos_flat)
+    new_vel_local[1:] = new_pos_flat[1:] - new_pos_flat[:-1]
+    
+    # 3. Recupera la velocità della testa originale (ultime 2 colonne)
+    # Assumiamo che il tic facciale non cambi il movimento del collo esistente nel video base
+    original_head_vel = original_full_window[:, -2:]
+    
+    # 4. Concatena tutto
+    new_full_seq = []
+    for i in range(seq_len):
+        row = np.concatenate([
+            new_pos_flat[i], 
+            new_vel_local[i], 
+            original_head_vel[i]
+        ])
+        new_full_seq.append(row)
         
-    return np.array(flattened_seq, dtype=np.float32)
+    return np.array(new_full_seq, dtype=np.float32)
 
 def genera_dataset_da_video():
-    """Genera dataset Training MULTI-CLASSE (0-5) con logica V3.1"""
+    """Genera dataset Training V3.2"""
     if not os.path.exists(config.RAW_DATA_DIR):
         print("ERRORE: Cartella video non trovata!")
         return np.array([]), np.array([])
@@ -117,91 +127,64 @@ def genera_dataset_da_video():
     injector = AnomalyInjector(fps=30)
     files = [f for f in os.listdir(config.RAW_DATA_DIR) if f.endswith(".mp4")]
     
-    if not files:
-        print("NESSUN VIDEO TROVATO.")
-        return np.array([]), np.array([])
+    if not files: return np.array([]), np.array([])
 
     for video_file in files:
         path = os.path.join(config.RAW_DATA_DIR, video_file)
-        
-        # Estrarre la sequenza dal video reale
         seq_reale = estrai_punti_da_video(path)
         
-        expected_dim = config.INPUT_SIZE 
-        if seq_reale.shape[1] != expected_dim:
-            print(f"⚠️ ERRORE DIMENSIONI: {video_file} ha {seq_reale.shape[1]} features, servono {expected_dim}. Salto.")
+        # Check dimensioni (deve essere INPUT_SIZE definita in config)
+        if seq_reale.shape[1] != config.INPUT_SIZE:
             continue
-        
-        if len(seq_reale) < config.SEQUENCE_LENGTH: 
-            print(f"⚠️ VIDEO TROPPO CORTO: {video_file} ({len(seq_reale)} frames). Salto.")
-            continue
+        if len(seq_reale) < config.SEQUENCE_LENGTH: continue
 
-        num_landmarks = expected_dim // 4
-        split_idx = num_landmarks * 2 
-        
-        samples_from_video = 0
+        # Calcolo indici per slicing
+        # Struttura: [POS (N*2) | VEL (N*2) | HEAD (2)]
+        num_landmarks = (config.INPUT_SIZE - 2) // 4
+        split_pos_end = num_landmarks * 2 
 
-        # --- FIX IMPORTANTE: Il ciclo di taglio finestre ora è indentato CORRETTAMENTE ---
-        # Scorre il video corrente a passi di 15 frame (overlap 50%)
         for i in range(0, len(seq_reale) - config.SEQUENCE_LENGTH, 15):
             window_full = seq_reale[i : i + config.SEQUENCE_LENGTH]
             
             # --- CLASSE 0: SANO ---
-            # Usiamo i dati reali così come sono
             X_list.append(window_full)
             y_list.append(0) 
-            samples_from_video += 1
             
-            # --- PREPARAZIONE DATI SINTETICI ---
-            # Estraiamo solo la parte di posizione per iniettare le anomalie
-            window_pos_flat = window_full[:, :split_idx]
-            # Reshape in 3D per l'injector: (Sequence, N_Landmarks, 2)
+            # Preparazione dati per augmentation (solo posizione)
+            window_pos_flat = window_full[:, :split_pos_end]
             window_pos_3d = window_pos_flat.reshape(config.SEQUENCE_LENGTH, num_landmarks, 2)
 
             # --- CLASSE 1: TREMORE ---
-            aug_tremor = window_pos_3d.copy()
-            freq_tremor = np.random.uniform(4.0, 6.0)
-            amp_tremor = np.random.uniform(0.015, 0.025)
-            aug_tremor = injector.add_tremor(aug_tremor, freq=freq_tremor, amplitude=amp_tremor)
-            X_list.append(recalculate_velocity(aug_tremor))
+            aug = injector.add_tremor(window_pos_3d.copy(), freq=np.random.uniform(4.0, 6.0))
+            X_list.append(recalculate_velocity_v32(aug, window_full))
             y_list.append(1)
 
             # --- CLASSE 2: TIC ---
-            aug_tic = window_pos_3d.copy()
-            amp_tic = np.random.uniform(0.04, 0.08)
-            aug_tic = injector.add_tic(aug_tic, amplitude=amp_tic)
-            X_list.append(recalculate_velocity(aug_tic))
+            aug = injector.add_tic(window_pos_3d.copy(), amplitude=np.random.uniform(0.04, 0.08))
+            X_list.append(recalculate_velocity_v32(aug, window_full))
             y_list.append(2)
 
             # --- CLASSE 3: IPOMIMIA ---
-            severity = np.random.uniform(0.6, 0.9)
-            aug_hypo = injector.add_hypomimia(window_pos_3d, severity=severity)
-            X_list.append(recalculate_velocity(aug_hypo))
+            aug = injector.add_hypomimia(window_pos_3d.copy(), severity=np.random.uniform(0.6, 0.9))
+            X_list.append(recalculate_velocity_v32(aug, window_full))
             y_list.append(3)
 
             # --- CLASSE 4: PARESI ---
-            aug_paresis = window_pos_3d.copy()
-            droop = np.random.uniform(0.02, 0.05)
-            aug_paresis = injector.add_paresis(aug_paresis, droop_factor=droop)
-            X_list.append(recalculate_velocity(aug_paresis))
+            aug = injector.add_paresis(window_pos_3d.copy(), droop_factor=np.random.uniform(0.02, 0.05))
+            X_list.append(recalculate_velocity_v32(aug, window_full))
             y_list.append(4)
 
             # --- CLASSE 5: DISCINESIA ---
-            intensity_dys = np.random.uniform(0.03, 0.06)
-            aug_dys = injector.add_dyskinesia(window_pos_3d, intensity=intensity_dys)
-            X_list.append(recalculate_velocity(aug_dys))
+            aug = injector.add_dyskinesia(window_pos_3d.copy(), intensity=np.random.uniform(0.03, 0.06))
+            X_list.append(recalculate_velocity_v32(aug, window_full))
             y_list.append(5)
-            
-        print(f"  -> Estratti {samples_from_video} segmenti base (Totale con Augmentation: {samples_from_video * 6})")
 
-    # --- FIX FINALE: Creazione corretta degli array prima del return ---
     if len(X_list) > 0:
         X_final = np.array(X_list, dtype=np.float32)
         y_final = np.array(y_list, dtype=np.int64)
     else:
-        print("⚠️ ATTENZIONE: Nessun dato generato!")
         X_final = np.array([], dtype=np.float32)
         y_final = np.array([], dtype=np.int64)
 
-    print(f"DATASET GENERATO V3.1: {len(X_final)} campioni totali (Shape X: {X_final.shape}).")
+    print(f"DATASET V3.2 GENERATO: {len(X_final)} campioni. Shape: {X_final.shape}")
     return X_final, y_final
