@@ -9,16 +9,20 @@ class AnomalyInjector:
         """
         SINTOMO: Tremore a riposo (Parkinson).
         MATEMATICA: Onda sinusoidale continua sommata al segnale.
+        MODIFICA V3.1: Adattato per array 3D (Tempo, Landm, Coord).
         """
         seq_new = sequence.copy()
         frames = len(sequence)
         t = np.arange(frames) / self.fps
         
-        # Genera onda: A * sin(2 * pi * f * t)
+        # Genera onda: A * sin(2 * pi * f * t). Shape (frames,)
         noise = amplitude * np.sin(2 * np.pi * freq * t)
         
-        # Applica il tremore all'asse Y (verticale)
-        seq_new[:, 1] += noise
+        # Applica il tremore all'asse Y (verticale) di TUTTI i landmark.
+        # noise[:, np.newaxis] trasforma (frames,) in (frames, 1) per il broadcasting
+        # contro seq_new[:, :, 1] che è (frames, num_landmarks).
+        # seq_new[:, :, 1] è l'asse Y di TUTTI i landmark.
+        seq_new[:, :, 1] += noise[:, np.newaxis]
         return seq_new
 
     def add_tic(self, sequence, duration_frames=4, amplitude=0.06):
@@ -27,6 +31,7 @@ class AnomalyInjector:
         MATEMATICA: Movimento Balistico (Seno parziale) su Gruppi Muscolari.
         """
         seq_new = sequence.copy()
+        # Assumiamo che la shape sia (frames, num_landmarks, 2)
         frames, num_landmarks, _ = sequence.shape
         
         # Scegliamo un punto casuale dove far avvenire il tic
@@ -35,26 +40,18 @@ class AnomalyInjector:
             end_tic = start_tic + duration_frames
             
             # --- MODIFICA V3.1: GRUPPO MUSCOLARE ---
-            # Invece di un solo punto, selezioniamo un gruppo di punti vicini (5-12 punti)
-            # per simulare la contrazione di un muscolo intero.
             num_affected = random.randint(5, 12)
             affected_indices = np.random.choice(num_landmarks, size=num_affected, replace=False)
             
             # --- MODIFICA V3.1: DIREZIONE VETTORIALE ---
-            # Il tic non va solo giù, ma tira in una direzione specifica (es. lato)
             dir_x = random.uniform(-0.8, 0.8)
             dir_y = random.uniform(-0.8, 0.8)
             
             # --- MODIFICA V3.1: MOVIMENTO BALISTICO ---
-            # Usiamo una curva (sin(0 -> pi)) per simulare accelerazione e decelerazione
             for t in range(start_tic, end_tic):
-                # Progress da 0.0 a 1.0 durante la durata del tic
                 progress = (t - start_tic) / duration_frames
-                
-                # Lo "scatto": parte da 0, picco a 1, torna a 0
                 spike = np.sin(progress * np.pi) 
                 
-                # Applichiamo lo spostamento a tutto il gruppo muscolare
                 for idx in affected_indices:
                     seq_new[t, idx, 0] += spike * amplitude * dir_x
                     seq_new[t, idx, 1] += spike * amplitude * dir_y
@@ -83,12 +80,14 @@ class AnomalyInjector:
         """
         SINTOMO: Paresi facciale / Asimmetria.
         MATEMATICA: Offset costante verso il basso (gravità) + immobilità quasi totale.
+        MODIFICA V3.1: Adattato per array 3D (Tempo, Landm, Coord).
         """
-        # Prima applichiamo un'ipomimia severa
+        # Prima applichiamo un'ipomimia severa (già 3D compliant)
         seq_new = self.add_hypomimia(sequence, severity=0.9)
         
-        # Poi aggiungiamo l'effetto "cadente" (drooping) alla Y
-        seq_new[:, 1] += droop_factor
+        # Poi aggiungiamo l'effetto "cadente" (drooping) alla Y di TUTTI i landmark.
+        # Il droop_factor deve essere applicato a tutti i punti lungo il tempo.
+        seq_new[:, :, 1] += droop_factor
         
         return seq_new
 
@@ -100,7 +99,6 @@ class AnomalyInjector:
         y = np.zeros(length)
 
         # Componente Caotica a Bassa Frequenza (Movimento "Coreico")
-        # Somma di 3 onde lente con fasi casuali
         freqs = [0.5, 1.3, 2.1]
         weights = [0.6, 0.3, 0.1]
         
@@ -158,7 +156,6 @@ def apply_random_anomaly(sequence):
     elif choice == 'tic':
         durata = random.randint(2, 6) 
         amp = random.uniform(0.04, 0.08)
-        # La nuova logica V3.1 è gestita internamente da injector.add_tic
         return injector.add_tic(sequence, duration_frames=durata, amplitude=amp), 2
         
     # 3. IPOMIMIA

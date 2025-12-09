@@ -153,59 +153,55 @@ def genera_dataset_da_video():
         num_landmarks = expected_dim // 4
         split_idx = num_landmarks * 2 
 
-        for i in range(0, len(seq_reale) - config.SEQUENCE_LENGTH, 15):
+    for i in range(0, len(seq_reale) - config.SEQUENCE_LENGTH, 15):
             window_full = seq_reale[i : i + config.SEQUENCE_LENGTH]
             
             # --- CLASSE 0: SANO ---
+            # Usiamo i dati reali così come sono
             X_list.append(window_full)
             y_list.append(0) 
             
-            # --- GENERAZIONE SINTETICA ---
+            # --- PREPARAZIONE DATI SINTETICI ---
             window_pos_flat = window_full[:, :split_idx]
+            # Reshape in 3D per l'injector: (Sequence, N_Landmarks, 2)
             window_pos_3d = window_pos_flat.reshape(config.SEQUENCE_LENGTH, num_landmarks, 2)
 
-            # --- CLASSE 1: TREMORE ---
+            # --- CLASSE 1: TREMORE (Fixed V3.1 - NO LOOP) ---
             aug_tremor = window_pos_3d.copy()
             freq_tremor = np.random.uniform(4.0, 6.0)
             amp_tremor = np.random.uniform(0.015, 0.025)
-            for k in range(num_landmarks):
-                aug_tremor[:, k, :] = injector.add_tremor(aug_tremor[:, k, :], freq=freq_tremor, amplitude=amp_tremor)
+            # FIX: Passiamo la finestra 3D. anomaly_utils.add_tremor deve essere adattata.
+            aug_tremor = injector.add_tremor(aug_tremor, freq=freq_tremor, amplitude=amp_tremor)
             X_list.append(recalculate_velocity(aug_tremor))
             y_list.append(1)
 
-            # --- CLASSE 2: TIC ---
+            # --- CLASSE 2: TIC (Fixed V3.1 - NO LOOP) ---
             aug_tic = window_pos_3d.copy()
-            # Nota: userà la nuova logica add_tic se aggiorni anomaly_utils
             amp_tic = np.random.uniform(0.04, 0.08)
-            # In V3.1 add_tic gestisce internamente la logica multi-punto se aggiornato
-            # Per ora manteniamo la chiamata semplice, l'intelligenza sarà dentro la classe
-            for k in range(num_landmarks):
-                 aug_tic[:, k, :] = injector.add_tic(aug_tic[:, k, :], amplitude=amp_tic)
+            # FIX: Passiamo la finestra 3D. La logica di gruppo è gestita in anomaly_utils.
+            aug_tic = injector.add_tic(aug_tic, amplitude=amp_tic)
             X_list.append(recalculate_velocity(aug_tic))
             y_list.append(2)
 
-            # --- CLASSE 3: IPOMIMIA ---
+            # --- CLASSE 3: IPOMIMIA (Già 3D Compliant) ---
             severity = np.random.uniform(0.6, 0.9)
             aug_hypo = injector.add_hypomimia(window_pos_3d, severity=severity)
             X_list.append(recalculate_velocity(aug_hypo))
             y_list.append(3)
 
-            # --- CLASSE 4: PARESI ---
+            # --- CLASSE 4: PARESI (Fixed V3.1 - NO LOOP) ---
             aug_paresis = window_pos_3d.copy()
             droop = np.random.uniform(0.02, 0.05)
-            for k in range(num_landmarks):
-                aug_paresis[:, k, :] = injector.add_paresis(aug_paresis[:, k, :], droop_factor=droop)
+            # FIX: Passiamo la finestra 3D. anomaly_utils.add_paresis deve essere adattata.
+            aug_paresis = injector.add_paresis(aug_paresis, droop_factor=droop)
             X_list.append(recalculate_velocity(aug_paresis))
             y_list.append(4)
 
-            # --- CLASSE 5: DISCINESIA ---
+            # --- CLASSE 5: DISCINESIA (Già 3D Compliant) ---
             intensity_dys = np.random.uniform(0.03, 0.06)
             aug_dys = injector.add_dyskinesia(window_pos_3d, intensity=intensity_dys)
             X_list.append(recalculate_velocity(aug_dys))
             y_list.append(5)
 
-    X_final = np.array(X_list, dtype=np.float32)
-    y_final = np.array(y_list, dtype=np.int64)
-    
     print(f"DATASET GENERATO V3.1: {len(X_final)} campioni (Shape X: {X_final.shape}).")
     return X_final, y_final
