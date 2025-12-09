@@ -66,7 +66,7 @@ def estrai_punti_da_video(video_path):
             # 3. Calcola Velocità GLOBALE TESTA (Tic collo/Dondolio)
             # La normalizziamo con la scala per renderla indipendente dallo zoom
             if prev_nose_pos is not None:
-                velocity_head = (current_nose - prev_nose_pos) / scale
+                velocity_head = ((current_nose - prev_nose_pos) / scale) * 100.0
             else:
                 velocity_head = np.array([0.0, 0.0])
                 
