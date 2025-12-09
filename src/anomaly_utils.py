@@ -23,19 +23,41 @@ class AnomalyInjector:
 
     def add_tic(self, sequence, duration_frames=4, amplitude=0.06):
         """
-        SINTOMO: Tic nervoso / Tourette.
-        MATEMATICA: Uno "spike" (scatto) improvviso e breve che interrompe il movimento.
+        SINTOMO: Tic nervoso / Tourette (AGGIORNAMENTO V3.1).
+        MATEMATICA: Movimento Balistico (Seno parziale) su Gruppi Muscolari.
         """
         seq_new = sequence.copy()
-        frames = len(sequence)
+        frames, num_landmarks, _ = sequence.shape
         
         # Scegliamo un punto casuale dove far avvenire il tic
         if frames > duration_frames + 2:
             start_tic = random.randint(1, frames - duration_frames - 1)
             end_tic = start_tic + duration_frames
             
-            # Applichiamo lo scatto (sottraiamo amplitude alla Y)
-            seq_new[start_tic:end_tic, 1] -= amplitude
+            # --- MODIFICA V3.1: GRUPPO MUSCOLARE ---
+            # Invece di un solo punto, selezioniamo un gruppo di punti vicini (5-12 punti)
+            # per simulare la contrazione di un muscolo intero.
+            num_affected = random.randint(5, 12)
+            affected_indices = np.random.choice(num_landmarks, size=num_affected, replace=False)
+            
+            # --- MODIFICA V3.1: DIREZIONE VETTORIALE ---
+            # Il tic non va solo giù, ma tira in una direzione specifica (es. lato)
+            dir_x = random.uniform(-0.8, 0.8)
+            dir_y = random.uniform(-0.8, 0.8)
+            
+            # --- MODIFICA V3.1: MOVIMENTO BALISTICO ---
+            # Usiamo una curva (sin(0 -> pi)) per simulare accelerazione e decelerazione
+            for t in range(start_tic, end_tic):
+                # Progress da 0.0 a 1.0 durante la durata del tic
+                progress = (t - start_tic) / duration_frames
+                
+                # Lo "scatto": parte da 0, picco a 1, torna a 0
+                spike = np.sin(progress * np.pi) 
+                
+                # Applichiamo lo spostamento a tutto il gruppo muscolare
+                for idx in affected_indices:
+                    seq_new[t, idx, 0] += spike * amplitude * dir_x
+                    seq_new[t, idx, 1] += spike * amplitude * dir_y
             
         return seq_new
 
@@ -136,6 +158,7 @@ def apply_random_anomaly(sequence):
     elif choice == 'tic':
         durata = random.randint(2, 6) 
         amp = random.uniform(0.04, 0.08)
+        # La nuova logica V3.1 è gestita internamente da injector.add_tic
         return injector.add_tic(sequence, duration_frames=durata, amplitude=amp), 2
         
     # 3. IPOMIMIA
@@ -150,7 +173,6 @@ def apply_random_anomaly(sequence):
 
     # 5. DISCINESIA
     elif choice == 'dyskinesia':
-        # Qui ora chiamiamo correttamente il metodo della classe
         amp = random.uniform(0.03, 0.06) 
         return injector.add_dyskinesia(sequence, intensity=amp), 5
     

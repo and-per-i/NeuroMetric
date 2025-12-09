@@ -7,40 +7,42 @@ from anomaly_utils import AnomalyInjector
 
 def get_kinematic_features(landmarks, tracked_indices):
     """
-    CORE V3.0: Normalizzazione Cinematica.
-    Trasforma i landmark grezzi in coordinate relative al volto, 
-    eliminando il movimento della testa (traslazione e rotazione).
+    CORE V3.1: Normalizzazione Cinematica (Rotazione DISABILITATA).
+    Trasforma i landmark grezzi in coordinate relative al naso,
+    ma MANTIENE la rotazione della testa per rilevare i Tic del collo.
     """
     # Converti tutti i landmark in numpy array (468, 2)
     all_lms = np.array([[lm.x, lm.y] for lm in landmarks])
     
     # --- STEP 1: ANCORAGGIO (Translation) ---
     # Sottraiamo il naso (Landmark 1) da tutti i punti.
-    # Ora il naso è sempre a (0,0), indipendentemente dalla posizione nella stanza.
+    # Il volto è centrato su (0,0), ma i movimenti relativi restano.
     nose_tip = all_lms[1]
     centered_lms = all_lms - nose_tip
     
     # --- STEP 2: RADDRIZZAMENTO (Rotation) ---
-    # Calcoliamo l'angolo tra gli occhi per annullare l'inclinazione della testa (Roll).
-    # Questo elimina i falsi positivi di "Paresi" quando il paziente inclina la testa.
-    # 33 = Angolo esterno occhio SX, 263 = Angolo esterno occhio DX
-    left_eye = centered_lms[33]
-    right_eye = centered_lms[263]
+    # MODIFICA V3.1: DISABILITATO.
+    # Se il paziente ha un tic al collo (scatto laterale), dobbiamo vederlo!
+    # Se raddrizziamo la testa, la velocity di quel movimento andrebbe a zero.
     
-    # Calcolo angolo e matrice di rotazione inversa
-    dY = right_eye[1] - left_eye[1]
-    dX = right_eye[0] - left_eye[0]
-    angle = np.arctan2(dY, dX)
+    # left_eye = centered_lms[33]
+    # right_eye = centered_lms[263]
+    # dY = right_eye[1] - left_eye[1]
+    # dX = right_eye[0] - left_eye[0]
+    # angle = np.arctan2(dY, dX)
+    # c, s = np.cos(angle), np.sin(angle)
+    # rotation_matrix = np.array(((c, s), (-s, c)))
+    # rotated_lms = np.dot(centered_lms, rotation_matrix)
     
-    c, s = np.cos(angle), np.sin(angle)
-    rotation_matrix = np.array(((c, s), (-s, c)))
-    
-    # Applichiamo la rotazione a tutti i punti
-    rotated_lms = np.dot(centered_lms, rotation_matrix)
+    rotated_lms = centered_lms # Nessuna rotazione applicata
     
     # --- STEP 3: SCALA (Scaling) ---
     # Normalizziamo in base alla distanza interpupillare per invarianza allo zoom.
-    dist_eyes = np.linalg.norm(right_eye - left_eye)
+    # Usiamo i punti originali per calcolare la distanza di riferimento.
+    left_eye_orig = all_lms[33]
+    right_eye_orig = all_lms[263]
+    dist_eyes = np.linalg.norm(right_eye_orig - left_eye_orig)
+    
     if dist_eyes > 0:
         normalized_lms = rotated_lms / dist_eyes
     else:
@@ -53,7 +55,7 @@ def get_kinematic_features(landmarks, tracked_indices):
 
 def estrai_punti_da_video(video_path):
     """
-    Legge il video, applica la normalizzazione cinematica e calcola la VELOCITÀ.
+    Legge il video, applica la normalizzazione V3.1 e calcola la VELOCITÀ.
     Output Shape: (Frames, N_Punti * 4) -> [Posizioni(x,y)..., Velocità(vx,vy)...]
     """
     print(f"Processing: {os.path.basename(video_path)}...")
@@ -68,7 +70,7 @@ def estrai_punti_da_video(video_path):
     )
     
     sequence = []
-    prev_landmarks = None # Memoria per calcolare la velocità (frame t - frame t-1)
+    prev_landmarks = None # Memoria per calcolare la velocità
     
     while cap.isOpened():
         success, frame = cap.read()
@@ -78,23 +80,22 @@ def estrai_punti_da_video(video_path):
         results = face_mesh.process(image_rgb)
         
         if results.multi_face_landmarks:
-            # 1. Ottieni coordinate stabilizzate (Solo Posizione: N x 2)
+            # 1. Ottieni coordinate (senza correzione rotazione)
             current_lms = get_kinematic_features(
                 results.multi_face_landmarks[0].landmark, 
                 config.TRACKED_LANDMARKS
             )
             
             # 2. Calcola Velocità (Dinamica)
-            # La velocità è fondamentale per distinguere Tic (veloce) da Ipomimia (lenta)
+            # Ora se la testa ruota, velocity avrà valori alti!
             if prev_landmarks is not None:
                 velocity = current_lms - prev_landmarks
             else:
-                velocity = np.zeros_like(current_lms) # Primo frame: velocità 0
+                velocity = np.zeros_like(current_lms)
             
             prev_landmarks = current_lms.copy()
             
-            # 3. Costruisci il vettore finale: [Tutte le Posizioni, Tutte le Velocità]
-            # Flattening: trasforma matrice N x 2 in vettore lungo
+            # 3. Costruisci il vettore finale: [Posizioni, Velocità]
             frame_vector = np.concatenate([current_lms.flatten(), velocity.flatten()])
             
             sequence.append(frame_vector)
@@ -104,17 +105,13 @@ def estrai_punti_da_video(video_path):
 
 def recalculate_velocity(position_sequence):
     """
-    Helper per ricalcolare la velocità dopo aver iniettato anomalie sintetiche.
-    Se modifichiamo la posizione (es. aggiungiamo tremore), la velocità vecchia non vale più.
-    Input: (Sequence_Len, N_Landmarks, 2)
-    Output: (Sequence_Len, Input_Size) appiattito
+    Ricalcola la velocità dopo aver iniettato anomalie sintetiche.
+    Necessario perché add_tremor/add_tic modificano solo la posizione.
     """
     velocities = np.zeros_like(position_sequence)
-    # Calcolo differenza: vel[t] = pos[t] - pos[t-1]
-    # Usiamo slicing numpy: dal secondo elemento in poi - dal primo al penultimo
+    # vel[t] = pos[t] - pos[t-1]
     velocities[1:] = position_sequence[1:] - position_sequence[:-1]
     
-    # Ricostruiamo il formato piatto [Posizione, Velocità] per ogni frame
     flattened_seq = []
     for i in range(len(position_sequence)):
         pos_flat = position_sequence[i].flatten()
@@ -124,7 +121,7 @@ def recalculate_velocity(position_sequence):
     return np.array(flattened_seq, dtype=np.float32)
 
 def genera_dataset_da_video():
-    """Genera dataset Training MULTI-CLASSE (0-5) con logica V3.0"""
+    """Genera dataset Training MULTI-CLASSE (0-5) con logica V3.1"""
     if not os.path.exists(config.RAW_DATA_DIR):
         print("ERRORE: Cartella video non trovata!")
         return np.array([]), np.array([])
@@ -132,6 +129,7 @@ def genera_dataset_da_video():
     X_list = []
     y_list = []
     
+    # Importante: assicurati che AnomalyInjector sia aggiornato (Step successivo)
     injector = AnomalyInjector(fps=30)
     files = [f for f in os.listdir(config.RAW_DATA_DIR) if f.endswith(".mp4")]
     
@@ -142,39 +140,28 @@ def genera_dataset_da_video():
     for video_file in files:
         path = os.path.join(config.RAW_DATA_DIR, video_file)
         
-        # seq_reale ora contiene [Posizione + Velocità]
-        # Shape: (Frames, N_Landmarks * 4)
+        # seq_reale ora contiene i movimenti del collo (se presenti)
         seq_reale = estrai_punti_da_video(path)
         
-        # Controllo dimensionale aggiornato
-        expected_dim = config.INPUT_SIZE # Assicurati che sia N * 4 nel config!
+        expected_dim = config.INPUT_SIZE 
         if seq_reale.shape[1] != expected_dim:
             print(f"⚠️ ERRORE DIMENSIONI: {video_file} ha {seq_reale.shape[1]} features, servono {expected_dim}.")
             continue
         
         if len(seq_reale) < config.SEQUENCE_LENGTH: continue
 
-        # Numero di landmark tracciati
-        # expected_dim è (N * 2 pos) + (N * 2 vel) = N * 4. Quindi N = dim / 4
         num_landmarks = expected_dim // 4
-        # L'indice di split tra posizione e velocità è a metà del vettore
         split_idx = num_landmarks * 2 
 
         for i in range(0, len(seq_reale) - config.SEQUENCE_LENGTH, 15):
             window_full = seq_reale[i : i + config.SEQUENCE_LENGTH]
             
             # --- CLASSE 0: SANO ---
-            # Usiamo i dati reali così come sono (già normalizzati e con velocità)
             X_list.append(window_full)
             y_list.append(0) 
             
-            # --- PREPARAZIONE DATI SINTETICI ---
-            # Per generare anomalie, dobbiamo lavorare solo sulla POSIZIONE.
-            # La velocità deve essere ricalcolata DOPO aver aggiunto il sintomo.
-            
-            # Estraiamo solo la parte di posizione (prima metà delle colonne)
+            # --- GENERAZIONE SINTETICA ---
             window_pos_flat = window_full[:, :split_idx]
-            # Reshape in 3D per l'injector: (Sequence, N_Landmarks, 2)
             window_pos_3d = window_pos_flat.reshape(config.SEQUENCE_LENGTH, num_landmarks, 2)
 
             # --- CLASSE 1: TREMORE ---
@@ -183,15 +170,17 @@ def genera_dataset_da_video():
             amp_tremor = np.random.uniform(0.015, 0.025)
             for k in range(num_landmarks):
                 aug_tremor[:, k, :] = injector.add_tremor(aug_tremor[:, k, :], freq=freq_tremor, amplitude=amp_tremor)
-            # Ricalcola velocità e unisci
             X_list.append(recalculate_velocity(aug_tremor))
             y_list.append(1)
 
             # --- CLASSE 2: TIC ---
             aug_tic = window_pos_3d.copy()
+            # Nota: userà la nuova logica add_tic se aggiorni anomaly_utils
             amp_tic = np.random.uniform(0.04, 0.08)
+            # In V3.1 add_tic gestisce internamente la logica multi-punto se aggiornato
+            # Per ora manteniamo la chiamata semplice, l'intelligenza sarà dentro la classe
             for k in range(num_landmarks):
-                aug_tic[:, k, :] = injector.add_tic(aug_tic[:, k, :], amplitude=amp_tic)
+                 aug_tic[:, k, :] = injector.add_tic(aug_tic[:, k, :], amplitude=amp_tic)
             X_list.append(recalculate_velocity(aug_tic))
             y_list.append(2)
 
@@ -218,5 +207,5 @@ def genera_dataset_da_video():
     X_final = np.array(X_list, dtype=np.float32)
     y_final = np.array(y_list, dtype=np.int64)
     
-    print(f"DATASET GENERATO V3.0: {len(X_final)} campioni (Shape X: {X_final.shape}).")
+    print(f"DATASET GENERATO V3.1: {len(X_final)} campioni (Shape X: {X_final.shape}).")
     return X_final, y_final

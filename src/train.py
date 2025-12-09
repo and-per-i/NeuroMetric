@@ -15,7 +15,8 @@ from data_gen import genera_dataset_da_video
 
 def train_model():
     # Riga 15 (Aggiornamento titolo da 2.0 a 3.0)
-    print(f"--- AVVIO TRAINING NEUROMETRIC MODEL 3.0 ---") 
+# Riga 15
+    print(f"--- AVVIO TRAINING NEUROMETRIC MODEL 3.1 (Fix Rotazione & Tic Balistici) ---")
     print(f"Device: {config.DEVICE}")
     # Riga 17 (Descrizione corretta dell'Input)
     print(f"Input Size: {config.INPUT_SIZE} features (Posizione + Velocità)") 
