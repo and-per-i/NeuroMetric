@@ -16,29 +16,15 @@ def get_kinematic_features(landmarks, tracked_indices):
     
     # --- STEP 1: ANCORAGGIO (Translation) ---
     # Sottraiamo il naso (Landmark 1) da tutti i punti.
-    # Il volto è centrato su (0,0), ma i movimenti relativi restano.
     nose_tip = all_lms[1]
     centered_lms = all_lms - nose_tip
     
     # --- STEP 2: RADDRIZZAMENTO (Rotation) ---
-    # MODIFICA V3.1: DISABILITATO.
-    # Se il paziente ha un tic al collo (scatto laterale), dobbiamo vederlo!
-    # Se raddrizziamo la testa, la velocity di quel movimento andrebbe a zero.
-    
-    # left_eye = centered_lms[33]
-    # right_eye = centered_lms[263]
-    # dY = right_eye[1] - left_eye[1]
-    # dX = right_eye[0] - left_eye[0]
-    # angle = np.arctan2(dY, dX)
-    # c, s = np.cos(angle), np.sin(angle)
-    # rotation_matrix = np.array(((c, s), (-s, c)))
-    # rotated_lms = np.dot(centered_lms, rotation_matrix)
-    
-    rotated_lms = centered_lms # Nessuna rotazione applicata
+    # MODIFICA V3.1: DISABILITATO per preservare i movimenti del collo (Tic).
+    rotated_lms = centered_lms 
     
     # --- STEP 3: SCALA (Scaling) ---
     # Normalizziamo in base alla distanza interpupillare per invarianza allo zoom.
-    # Usiamo i punti originali per calcolare la distanza di riferimento.
     left_eye_orig = all_lms[33]
     right_eye_orig = all_lms[263]
     dist_eyes = np.linalg.norm(right_eye_orig - left_eye_orig)
@@ -87,7 +73,6 @@ def estrai_punti_da_video(video_path):
             )
             
             # 2. Calcola Velocità (Dinamica)
-            # Ora se la testa ruota, velocity avrà valori alti!
             if prev_landmarks is not None:
                 velocity = current_lms - prev_landmarks
             else:
@@ -129,7 +114,6 @@ def genera_dataset_da_video():
     X_list = []
     y_list = []
     
-    # Importante: assicurati che AnomalyInjector sia aggiornato (Step successivo)
     injector = AnomalyInjector(fps=30)
     files = [f for f in os.listdir(config.RAW_DATA_DIR) if f.endswith(".mp4")]
     
@@ -140,68 +124,84 @@ def genera_dataset_da_video():
     for video_file in files:
         path = os.path.join(config.RAW_DATA_DIR, video_file)
         
-        # seq_reale ora contiene i movimenti del collo (se presenti)
+        # Estrarre la sequenza dal video reale
         seq_reale = estrai_punti_da_video(path)
         
         expected_dim = config.INPUT_SIZE 
         if seq_reale.shape[1] != expected_dim:
-            print(f"⚠️ ERRORE DIMENSIONI: {video_file} ha {seq_reale.shape[1]} features, servono {expected_dim}.")
+            print(f"⚠️ ERRORE DIMENSIONI: {video_file} ha {seq_reale.shape[1]} features, servono {expected_dim}. Salto.")
             continue
         
-        if len(seq_reale) < config.SEQUENCE_LENGTH: continue
+        if len(seq_reale) < config.SEQUENCE_LENGTH: 
+            print(f"⚠️ VIDEO TROPPO CORTO: {video_file} ({len(seq_reale)} frames). Salto.")
+            continue
 
         num_landmarks = expected_dim // 4
         split_idx = num_landmarks * 2 
+        
+        samples_from_video = 0
 
-    for i in range(0, len(seq_reale) - config.SEQUENCE_LENGTH, 15):
+        # --- FIX IMPORTANTE: Il ciclo di taglio finestre ora è indentato CORRETTAMENTE ---
+        # Scorre il video corrente a passi di 15 frame (overlap 50%)
+        for i in range(0, len(seq_reale) - config.SEQUENCE_LENGTH, 15):
             window_full = seq_reale[i : i + config.SEQUENCE_LENGTH]
             
             # --- CLASSE 0: SANO ---
             # Usiamo i dati reali così come sono
             X_list.append(window_full)
             y_list.append(0) 
+            samples_from_video += 1
             
             # --- PREPARAZIONE DATI SINTETICI ---
+            # Estraiamo solo la parte di posizione per iniettare le anomalie
             window_pos_flat = window_full[:, :split_idx]
             # Reshape in 3D per l'injector: (Sequence, N_Landmarks, 2)
             window_pos_3d = window_pos_flat.reshape(config.SEQUENCE_LENGTH, num_landmarks, 2)
 
-            # --- CLASSE 1: TREMORE (Fixed V3.1 - NO LOOP) ---
+            # --- CLASSE 1: TREMORE ---
             aug_tremor = window_pos_3d.copy()
             freq_tremor = np.random.uniform(4.0, 6.0)
             amp_tremor = np.random.uniform(0.015, 0.025)
-            # FIX: Passiamo la finestra 3D. anomaly_utils.add_tremor deve essere adattata.
             aug_tremor = injector.add_tremor(aug_tremor, freq=freq_tremor, amplitude=amp_tremor)
             X_list.append(recalculate_velocity(aug_tremor))
             y_list.append(1)
 
-            # --- CLASSE 2: TIC (Fixed V3.1 - NO LOOP) ---
+            # --- CLASSE 2: TIC ---
             aug_tic = window_pos_3d.copy()
             amp_tic = np.random.uniform(0.04, 0.08)
-            # FIX: Passiamo la finestra 3D. La logica di gruppo è gestita in anomaly_utils.
             aug_tic = injector.add_tic(aug_tic, amplitude=amp_tic)
             X_list.append(recalculate_velocity(aug_tic))
             y_list.append(2)
 
-            # --- CLASSE 3: IPOMIMIA (Già 3D Compliant) ---
+            # --- CLASSE 3: IPOMIMIA ---
             severity = np.random.uniform(0.6, 0.9)
             aug_hypo = injector.add_hypomimia(window_pos_3d, severity=severity)
             X_list.append(recalculate_velocity(aug_hypo))
             y_list.append(3)
 
-            # --- CLASSE 4: PARESI (Fixed V3.1 - NO LOOP) ---
+            # --- CLASSE 4: PARESI ---
             aug_paresis = window_pos_3d.copy()
             droop = np.random.uniform(0.02, 0.05)
-            # FIX: Passiamo la finestra 3D. anomaly_utils.add_paresis deve essere adattata.
             aug_paresis = injector.add_paresis(aug_paresis, droop_factor=droop)
             X_list.append(recalculate_velocity(aug_paresis))
             y_list.append(4)
 
-            # --- CLASSE 5: DISCINESIA (Già 3D Compliant) ---
+            # --- CLASSE 5: DISCINESIA ---
             intensity_dys = np.random.uniform(0.03, 0.06)
             aug_dys = injector.add_dyskinesia(window_pos_3d, intensity=intensity_dys)
             X_list.append(recalculate_velocity(aug_dys))
             y_list.append(5)
+            
+        print(f"  -> Estratti {samples_from_video} segmenti base (Totale con Augmentation: {samples_from_video * 6})")
 
-    print(f"DATASET GENERATO V3.1: {len(X_final)} campioni (Shape X: {X_final.shape}).")
+    # --- FIX FINALE: Creazione corretta degli array prima del return ---
+    if len(X_list) > 0:
+        X_final = np.array(X_list, dtype=np.float32)
+        y_final = np.array(y_list, dtype=np.int64)
+    else:
+        print("⚠️ ATTENZIONE: Nessun dato generato!")
+        X_final = np.array([], dtype=np.float32)
+        y_final = np.array([], dtype=np.int64)
+
+    print(f"DATASET GENERATO V3.1: {len(X_final)} campioni totali (Shape X: {X_final.shape}).")
     return X_final, y_final
