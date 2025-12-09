@@ -88,20 +88,40 @@ def estrai_punti_da_video(video_path):
 
 def recalculate_velocity_v32(augmented_pos_3d, original_full_window):
     """
-    Ricalcola la velocità locale dopo l'augmentation, ma MANTIENE la velocità della testa originale.
+    Ricalcola la velocità locale E AGGIORNA la velocità globale (testa)
+    basandosi sul movimento sintetico iniettato.
+    FIX CRITICO V3.2: Include il Boost x100 anche per i Tic generati.
     """
     seq_len = augmented_pos_3d.shape[0]
     
-    # 1. Appiattisci le nuove posizioni
+    # 1. Appiattisci le nuove posizioni (Feature Locali)
     new_pos_flat = augmented_pos_3d.reshape(seq_len, -1)
     
-    # 2. Calcola nuove velocità locali
+    # 2. Calcola nuove velocità locali (Feature Locali)
     new_vel_local = np.zeros_like(new_pos_flat)
-    new_vel_local[1:] = new_pos_flat[1:] - new_pos_flat[:-1]
+    if seq_len > 1:
+        new_vel_local[1:] = new_pos_flat[1:] - new_pos_flat[:-1]
     
-    # 3. Recupera la velocità della testa originale (ultime 2 colonne)
-    # Assumiamo che il tic facciale non cambi il movimento del collo esistente nel video base
+    # 3. Recupera la velocità della testa originale 
+    # (Questa ha già il Boost x100 applicato in estrai_punti_da_video)
     original_head_vel = original_full_window[:, -2:]
+    
+    # --- FIX: Calcolo Velocità Sintetica Testa ---
+    # Se anomaly_utils ha spostato tutti i punti (Head Jerk), il "baricentro" della faccia si è mosso.
+    # Calcoliamo la media delle posizioni per ogni frame (Baricentro)
+    centroids = np.mean(augmented_pos_3d, axis=1) # Shape: (30, 2)
+    
+    # Calcoliamo la velocità di questo baricentro
+    centroid_vel = np.zeros_like(centroids)
+    if seq_len > 1:
+        centroid_vel[1:] = centroids[1:] - centroids[:-1]
+    
+    # Applichiamo lo stesso BOOST x100 che usiamo nel video reale
+    synthetic_head_vel_boosted = centroid_vel * 100.0
+    
+    # Sommiamo: Velocità del video originale + Velocità del Tic sintetico
+    final_head_vel = original_head_vel + synthetic_head_vel_boosted
+    # ---------------------------------------------
     
     # 4. Concatena tutto
     new_full_seq = []
@@ -109,11 +129,12 @@ def recalculate_velocity_v32(augmented_pos_3d, original_full_window):
         row = np.concatenate([
             new_pos_flat[i], 
             new_vel_local[i], 
-            original_head_vel[i]
+            final_head_vel[i] # Usiamo la velocità corretta e boostata
         ])
         new_full_seq.append(row)
         
     return np.array(new_full_seq, dtype=np.float32)
+    
 
 def genera_dataset_da_video():
     """Genera dataset Training V3.2"""
