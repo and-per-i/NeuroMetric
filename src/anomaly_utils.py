@@ -27,11 +27,10 @@ class AnomalyInjector:
 
     def add_tic(self, sequence, duration_frames=4, amplitude=0.06):
         """
-        SINTOMO: Tic nervoso / Tourette (AGGIORNAMENTO V3.1).
-        MATEMATICA: Movimento Balistico (Seno parziale) su Gruppi Muscolari.
+        SINTOMO: Tic nervoso / Tourette (AGGIORNAMENTO V3.2 - COMPLETO).
+        Include sia TIC LOCALI (smorfie) che TIC GLOBALI (scatti del collo).
         """
         seq_new = sequence.copy()
-        # Assumiamo che la shape sia (frames, num_landmarks, 2)
         frames, num_landmarks, _ = sequence.shape
         
         # Scegliamo un punto casuale dove far avvenire il tic
@@ -39,22 +38,39 @@ class AnomalyInjector:
             start_tic = random.randint(1, frames - duration_frames - 1)
             end_tic = start_tic + duration_frames
             
-            # --- MODIFICA V3.1: GRUPPO MUSCOLARE ---
+            # --- A. TIC LOCALE (Smorfia: Occhi/Bocca) ---
             num_affected = random.randint(5, 12)
             affected_indices = np.random.choice(num_landmarks, size=num_affected, replace=False)
+            dir_x_local = random.uniform(-0.8, 0.8)
+            dir_y_local = random.uniform(-0.8, 0.8)
+
+            # --- B. TIC GLOBALE (Scatto del Collo) ---
+            # Simuliamo il collo spostando TUTTI i punti (Naso compreso)
+            has_head_jerk = random.random() > 0.4  # 60% probabilità di scatto testa
+            jerk_x = 0.0
+            jerk_y = 0.0
             
-            # --- MODIFICA V3.1: DIREZIONE VETTORIALE ---
-            dir_x = random.uniform(-0.8, 0.8)
-            dir_y = random.uniform(-0.8, 0.8)
-            
-            # --- MODIFICA V3.1: MOVIMENTO BALISTICO ---
+            if has_head_jerk:
+                # Lo scatto del collo è più ampio della smorfia
+                jerk_amp = amplitude * random.uniform(1.5, 3.0) 
+                jerk_x = random.choice([-1, 1]) * jerk_amp
+                jerk_y = random.uniform(-0.5, 0.5) * jerk_amp
+
+            # APPLICAZIONE (Moto Balistico)
             for t in range(start_tic, end_tic):
                 progress = (t - start_tic) / duration_frames
+                # Spike: movimento rapido andata e ritorno (sinusoide mezza onda)
                 spike = np.sin(progress * np.pi) 
                 
+                # 1. Applica scatto testa a TUTTI i punti (Se attivo)
+                if has_head_jerk:
+                    seq_new[t, :, 0] += spike * jerk_x
+                    seq_new[t, :, 1] += spike * jerk_y
+
+                # 2. Applica smorfia solo ai punti locali
                 for idx in affected_indices:
-                    seq_new[t, idx, 0] += spike * amplitude * dir_x
-                    seq_new[t, idx, 1] += spike * amplitude * dir_y
+                    seq_new[t, idx, 0] += spike * amplitude * dir_x_local
+                    seq_new[t, idx, 1] += spike * amplitude * dir_y_local
             
         return seq_new
 
