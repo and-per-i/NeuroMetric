@@ -49,7 +49,7 @@ def create_session_structure(project_root, video_filename):
 
 def generate_html_report(filepath, video_name, total_frames, fps, stats, events):
     """
-    Genera un Report Clinico con Design Moderno (Dashboard Style).
+    Genera un Report Clinico con Design Moderno e LIGHTBOX VIDEO (Loop & Blur).
     """
     date_str = datetime.datetime.now().strftime("%d/%m/%Y")
     
@@ -89,11 +89,12 @@ def generate_html_report(filepath, video_name, total_frames, fps, stats, events)
             <td class="timing">{evt['start_time']:.1f}s <span style="font-size:0.8em; opacity:0.6">(+{evt['duration']:.1f}s)</span></td>
             <td><span class="{conf_class}">{evt['max_conf']:.1%}</span></td>
             <td>
-                <div class="video-thumb">
-                    <video controls preload="metadata">
+                <div class="video-thumb" onclick="openModal('{clip_rel_path}')">
+                    <video muted loop autoplay playsinline>
                         <source src="{clip_rel_path}" type="video/webm">
                         <source src="{clip_rel_path}" type="video/mp4">
                     </video>
+                    <div class="play-overlay">🔍</div>
                 </div>
             </td>
         </tr>"""
@@ -160,16 +161,72 @@ def generate_html_report(filepath, video_name, total_frames, fps, stats, events)
             .badge-ipomimia {{ background: #f3e8ff; color: #6b21a8; }}
             .badge-paresi {{ background: #374151; color: #f9fafb; }}
 
-            .video-thumb {{ width: 140px; height: 80px; background-color: #000; border-radius: 8px; overflow: hidden; display: flex; align-items: center; justify-content: center; border: 1px solid #ddd; }}
-            .video-thumb video {{ width: 100%; height: 100%; object-fit: cover; }}
+            .video-thumb {{ 
+                width: 140px; height: 80px; background-color: #000; border-radius: 8px; 
+                overflow: hidden; display: flex; align-items: center; justify-content: center; 
+                border: 1px solid #ddd; cursor: pointer; position: relative;
+                transition: transform 0.2s;
+            }}
+            .video-thumb:hover {{ transform: scale(1.05); border-color: #3b82f6; box-shadow: 0 4px 12px rgba(59, 130, 246, 0.3); }}
+            .video-thumb video {{ width: 100%; height: 100%; object-fit: cover; opacity: 0.9; }}
+            .play-overlay {{
+                position: absolute; color: white; font-size: 20px; pointer-events: none;
+                text-shadow: 0 2px 4px rgba(0,0,0,0.5); opacity: 0; transition: opacity 0.2s;
+                background: rgba(0,0,0,0.4); padding: 8px; border-radius: 50%;
+            }}
+            .video-thumb:hover .play-overlay {{ opacity: 1; }}
 
             .confidence-high {{ color: var(--color-normale-text); font-weight: bold; }}
             .confidence-med {{ color: #d97706; font-weight: bold; }}
             .zone-tag {{ display: inline-block; background: #f1f5f9; color: #475569; padding: 2px 8px; border-radius: 4px; font-size: 12px; margin: 2px 2px 2px 0; }}
             .timing {{ font-family: 'Consolas', monospace; color: var(--text-secondary); }}
+
+            /* --- MODAL (LIGHTBOX) STYLES --- */
+            .modal-overlay {{
+                position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+                background: rgba(0, 0, 0, 0.85); /* Sfondo scuro */
+                backdrop-filter: blur(8px); /* Effetto Blur */
+                z-index: 1000;
+                display: none; /* Nascosto di default */
+                justify-content: center; align-items: center;
+                opacity: 0; transition: opacity 0.3s ease;
+            }}
+            .modal-overlay.active {{ display: flex; opacity: 1; }}
+            
+            .modal-content {{
+                position: relative;
+                max-width: 90%; max-height: 90%;
+                border-radius: 12px;
+                overflow: hidden;
+                box-shadow: 0 20px 50px rgba(0,0,0,0.5);
+                transform: scale(0.95); transition: transform 0.3s ease;
+                background: black;
+            }}
+            .modal-overlay.active .modal-content {{ transform: scale(1); }}
+            
+            .modal-content video {{
+                display: block; max-width: 100%; max-height: 85vh; margin: 0 auto;
+            }}
+            .close-btn {{
+                position: absolute; top: 20px; right: 30px;
+                color: white; font-size: 40px; cursor: pointer;
+                z-index: 1001; text-shadow: 0 2px 10px rgba(0,0,0,0.5);
+                transition: transform 0.2s;
+            }}
+            .close-btn:hover {{ transform: scale(1.1); color: #ef4444; }}
         </style>
     </head>
     <body>
+        <div id="videoModal" class="modal-overlay" onclick="closeModal()">
+            <div class="close-btn" onclick="closeModal()">&times;</div>
+            <div class="modal-content" onclick="event.stopPropagation()">
+                <video id="modalVideo" controls loop>
+                    <source src="" type="video/mp4">
+                    Il browser non supporta il tag video.
+                </video>
+            </div>
+        </div>
+
         <div class="container">
             <header>
                 <div><h1>Analisi NeuroMetrica</h1><div class="subtitle">File: {video_name} | Data: {date_str}</div></div>
@@ -192,16 +249,51 @@ def generate_html_report(filepath, video_name, total_frames, fps, stats, events)
             
             <p style="text-align: center; color: #9ca3af; font-size: 12px; margin-top: 30px;">Report generato automaticamente da AI • Validare clinicamente</p>
         </div>
+
+        <script>
+            // Logica Modal
+            function openModal(videoSrc) {{
+                const modal = document.getElementById('videoModal');
+                const video = document.getElementById('modalVideo');
+                
+                video.src = videoSrc;
+                modal.classList.add('active');
+                
+                // Avvia video
+                const playPromise = video.play();
+                if (playPromise !== undefined) {{
+                    playPromise.then(_ => {{
+                        // Autoplay started
+                    }}).catch(error => {{
+                        console.log("Autoplay prevent from browser");
+                    }});
+                }}
+            }}
+
+            function closeModal() {{
+                const modal = document.getElementById('videoModal');
+                const video = document.getElementById('modalVideo');
+                
+                modal.classList.remove('active');
+                setTimeout(() => {{
+                    video.pause();
+                    video.src = ""; 
+                }}, 300); // Aspetta fine animazione CSS
+            }}
+
+            // Chiudi con ESC
+            document.addEventListener('keydown', function(event) {{
+                if (event.key === "Escape") {{
+                    closeModal();
+                }}
+            }});
+        </script>
     </body>
     </html>
     """
     with open(filepath, "w", encoding="utf-8") as f: f.write(html_content)
 
 def find_dynamic_zone(buffer_array, anatomy_map):
-    """
-    Identifica la zona del volto con maggiore varianza (movimento).
-    buffer_array: Deve essere un array Numpy (Sequenza, Features)
-    """
     # OPTIMIZATION: Evitiamo conversioni inutili se è già array
     if not isinstance(buffer_array, np.ndarray):
         try:
@@ -227,7 +319,6 @@ def find_dynamic_zone(buffer_array, anatomy_map):
         if current_idx + n_features > total_features:
             break
             
-        # Calcolo deviazione standard sulla finestra temporale per questa zona
         zone_data = data[:, current_idx : current_idx + n_features]
         movement_score = np.mean(np.std(zone_data, axis=0)) 
         
@@ -312,6 +403,14 @@ def main(video_filename):
     while cap.isOpened():
         ret, frame = cap.read()
         if not ret: break
+
+        # --- OTTIMIZZAZIONE PC LOCALE ---
+        scale_percent = 50  
+        new_width = int(frame.shape[1] * scale_percent / 100)
+        new_height = int(frame.shape[0] * scale_percent / 100)
+        frame = cv2.resize(frame, (new_width, new_height))
+        h, w, _ = frame.shape
+        # -------------------------------
         
         image_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         results = face_mesh.process(image_rgb)
@@ -358,11 +457,7 @@ def main(video_filename):
 
             if len(buffer) == config.SEQUENCE_LENGTH:
                 # --- OPTIMIZATION FIX: Conversione Diretta ---
-                # 1. Converti in numpy array (Veloce)
                 np_buffer = np.array(buffer, dtype=np.float32)
-                
-                # 2. Converti in Tensore e aggiungi dimensione batch (unsqueeze)
-                # Questo evita il warning "list of arrays" ed è il metodo più rapido
                 input_tensor = torch.tensor(np_buffer, dtype=torch.float32).unsqueeze(0).to(device)
                 
                 with torch.no_grad():
