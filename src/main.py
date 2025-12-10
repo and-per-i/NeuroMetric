@@ -263,7 +263,8 @@ def main(video_filename):
             buffer.append(frame_features_vector)
 
             if len(buffer) == config.SEQUENCE_LENGTH:
-                input_tensor = torch.tensor([list(buffer)], dtype=torch.float32).to(device)
+                np_buffer = np.array(buffer, dtype=np.float32)
+                input_tensor = torch.tensor([np_buffer], dtype=torch.float32).to(device)
                 with torch.no_grad():
                     out = model(input_tensor)
                     probs = torch.softmax(out, dim=1)
