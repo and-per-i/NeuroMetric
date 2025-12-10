@@ -8,7 +8,7 @@ import sys
 import datetime
 import argparse
 
-# --- SETUP FINALE IMPORTAZIONI ---
+# --- SETUP IMPORTAZIONI ---
 current_dir = os.path.dirname(os.path.abspath(__file__))
 sys.path.append(current_dir)
 try:
@@ -33,10 +33,12 @@ CLASS_MAP = {
 
 # --- CONFIGURAZIONI (TUNING V3.2) ---
 CONFIDENCE_THRESHOLD = 0.85
-# Aumentiamo la pazienza per unire eventi vicini (es. Bocca -> Occhio)
 PATIENCE_FRAMES = 30  
-# Riduciamo la durata minima: i tic possono essere fulminei (0.2s)
 MIN_CLIP_FRAMES = 5   
+
+# --- NUOVA CONFIGURAZIONE VISIVA ---
+# Mantiene il rettangolo rosso visibile per 0.5s extra dopo la fine del tic
+VISUAL_HOLD_FRAMES = 15 
 
 def create_session_structure(project_root, video_filename):
     base_name = os.path.splitext(os.path.basename(video_filename))[0]
@@ -47,9 +49,6 @@ def create_session_structure(project_root, video_filename):
     return session_dir, clips_dir
 
 def generate_html_report(filepath, video_name, total_frames, fps, stats, events):
-    """
-    Genera un report HTML completo (Versione V3.0) con video embedded e stili CSS.
-    """
     duration = total_frames / fps if fps > 0 else 0
     
     stat_html = ""
@@ -209,6 +208,12 @@ def main(video_filename):
     patience = 0
     frame_idx = 0
 
+    # --- VARIABILI PER LA PERSISTENZA VISIVA ---
+    visual_cooldown = 0
+    last_box_coords = None
+    last_overlay_text = "NORMALE"
+    last_overlay_color = (0, 255, 0)
+
     print(f"▶️ Analisi avviata...")
 
     while cap.isOpened():
@@ -281,14 +286,48 @@ def main(video_filename):
                             pad = 20
                             box_coords = (int(min(xs))-pad, int(min(ys))-pad, int(max(xs))+pad, int(max(ys))+pad)
 
+        # --- LOGICA DI DISEGNO AVANZATA (VISUAL HOLD) ---
         if active_anomaly and box_coords:
-            cv2.rectangle(frame, (box_coords[0], box_coords[1]), (box_coords[2], box_coords[3]), (0, 0, 255), 2)
-            cv2.putText(frame, f"{current_label} ({current_conf:.0%}) - {current_zone_name}", 
-                        (box_coords[0], box_coords[1]-10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
+            # Nuova anomalia rilevata: aggiorna grafica e resetta timer
+            visual_cooldown = VISUAL_HOLD_FRAMES
+            last_box_coords = box_coords
+            last_overlay_text = f"{current_label} ({current_conf:.0%}) - {current_zone_name}"
+            last_overlay_color = (0, 0, 255) # Rosso
+        
+        elif visual_cooldown > 0:
+            # Anomalia finita ma siamo nel periodo di "persistenza": mantieni la vecchia grafica
+            visual_cooldown -= 1
+        
+        else:
+            # Nessuna anomalia e timer scaduto: reset a NORMALE
+            last_box_coords = None
+            last_overlay_text = "NORMALE"
+            last_overlay_color = (0, 255, 0) # Verde
+
+        # Disegna usando le variabili "persistenti"
+        if last_box_coords:
+            cv2.rectangle(frame, 
+                         (last_box_coords[0], last_box_coords[1]), 
+                         (last_box_coords[2], last_box_coords[3]), 
+                         last_overlay_color, 2)
+            
+            # Sfondo per il testo (migliora leggibilità)
+            text_size, _ = cv2.getTextSize(last_overlay_text, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2)
+            cv2.rectangle(frame, 
+                         (last_box_coords[0], last_box_coords[1] - 25), 
+                         (last_box_coords[0] + text_size[0], last_box_coords[1]), 
+                         last_overlay_color, -1)
+            
+            cv2.putText(frame, last_overlay_text, 
+                        (last_box_coords[0], last_box_coords[1]-5), 
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
         else:
             cv2.putText(frame, "NORMALE", (20, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
 
-        # --- GESTIONE EVENTI MIGLIORATA ---
+
+        # --- GESTIONE EVENTI (CLIPS) ---
+        # Nota: La registrazione usa 'active_anomaly' (la verità matematica),
+        # non 'visual_cooldown' (che è solo estetica).
         if active_anomaly:
             patience = 0
             if not is_recording_clip:
@@ -307,7 +346,6 @@ def main(video_filename):
                 }
                 print(f"  🔴 REC: {current_label} in {current_zone_name}")
             else:
-                # Accumuliamo le zone se il clip è già in registrazione
                 current_event["zones"].add(current_zone_name)
                 if current_conf > current_event.get("max_conf", 0): 
                     current_event["max_conf"] = current_conf
@@ -321,17 +359,13 @@ def main(video_filename):
                 
                 duration = (frame_idx / fps) - current_event["start_time"]
                 
-                # Controllo Durata Minima
                 if duration * fps > MIN_CLIP_FRAMES:
                     unique_zones = sorted(list(current_event["zones"]))
                     current_event["zone"] = " + ".join(unique_zones)
                     current_event["duration"] = duration
-                    
                     clip_events.append(current_event)
                     print(f"  🟢 STOP. Durata: {duration:.1f}s. Zone: {current_event['zone']}")
                 else:
-                    # DEBUG: Avvisa se stiamo buttando via dati
-                    print(f"  🗑️ CLIP SCARTATA (Troppo breve: {duration:.2f}s) - {current_event['symptom']}")
                     try: os.remove(os.path.join(clips_dir, current_event['filename']))
                     except: pass
         
