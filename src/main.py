@@ -36,8 +36,7 @@ CONFIDENCE_THRESHOLD = 0.85
 PATIENCE_FRAMES = 30  
 MIN_CLIP_FRAMES = 5   
 
-# --- NUOVA CONFIGURAZIONE VISIVA ---
-# Mantiene il rettangolo rosso visibile per 0.5s extra dopo la fine del tic
+# --- CONFIGURAZIONE VISIVA ---
 VISUAL_HOLD_FRAMES = 15 
 
 def create_session_structure(project_root, video_filename):
@@ -49,75 +48,168 @@ def create_session_structure(project_root, video_filename):
     return session_dir, clips_dir
 
 def generate_html_report(filepath, video_name, total_frames, fps, stats, events):
-    duration = total_frames / fps if fps > 0 else 0
+    """
+    Genera un Report Clinico con Design Moderno (Dashboard Style).
+    """
+    date_str = datetime.datetime.now().strftime("%d/%m/%Y")
     
-    stat_html = ""
-    for sintomo, count in stats.items():
-        perc = (count / total_frames * 100) if total_frames > 0 else 0
-        color = "#27ae60" if sintomo == "NORMALE" else ("#e74c3c" if perc > 10 else "#f39c12")
-        stat_html += f"<p><strong>{sintomo}:</strong> <span style='color:{color}; font-weight:bold'>{perc:.1f}%</span></p>"
+    # --- CALCOLO STATISTICHE DASHBOARD ---
+    sorted_stats = sorted(stats.items(), key=lambda item: item[1], reverse=True)
+    predom_label, predom_count = sorted_stats[0] if sorted_stats else ("N/A", 0)
+    predom_perc = (predom_count / total_frames * 100) if total_frames > 0 else 0
+    
+    tic_count = stats.get("TIC", 0)
+    tic_perc = (tic_count / total_frames * 100) if total_frames > 0 else 0
+    tic_events_count = len([e for e in events if e['symptom'] == 'TIC'])
 
+    disc_count = stats.get("DISCINESIA", 0)
+    disc_perc = (disc_count / total_frames * 100) if total_frames > 0 else 0
+    
+    if events:
+        avg_conf = sum(e['max_conf'] for e in events) / len(events)
+    else:
+        avg_conf = 0.0
+
+    # --- GENERAZIONE RIGHE TABELLA ---
     rows_html = ""
-    for evt in events:
+    for idx, evt in enumerate(events):
         clip_rel_path = f"clips/{evt['filename']}"
+        symptom_lower = evt['symptom'].lower()
+        
+        zones_list = evt['zone'].split(" + ")
+        zones_html = "".join([f'<span class="zone-tag">{z}</span>' for z in zones_list])
+        
+        conf_class = "confidence-high" if evt['max_conf'] > 0.9 else "confidence-med"
+
         rows_html += f"""
         <tr>
-            <td>{evt['id']}</td>
-            <td><span class="badge {evt['symptom']}">{evt['symptom']}</span></td>
-            <td>{evt['zone']}</td>
-            <td>{evt['start_time']:.1f}s</td>
-            <td>{evt['duration']:.1f}s</td>
-            <td>{evt['max_conf']:.1%}</td>
+            <td>#{idx+1:02d}</td>
+            <td><span class="badge badge-{symptom_lower}">{evt['symptom']}</span></td>
+            <td>{zones_html}</td>
+            <td class="timing">{evt['start_time']:.1f}s <span style="font-size:0.8em; opacity:0.6">(+{evt['duration']:.1f}s)</span></td>
+            <td><span class="{conf_class}">{evt['max_conf']:.1%}</span></td>
             <td>
-                <video width="200" controls loop preload="metadata">
-                    <source src="{clip_rel_path}" type="video/webm">
-                    <source src="{clip_rel_path}" type="video/mp4">
-                    <source src="{clip_rel_path}" type="video/x-msvideo">
-                    <p>Browser non supporta video. <a href="{clip_rel_path}">Scarica</a></p>
-                </video>
+                <div class="video-thumb">
+                    <video controls preload="metadata">
+                        <source src="{clip_rel_path}" type="video/webm">
+                        <source src="{clip_rel_path}" type="video/mp4">
+                    </video>
+                </div>
             </td>
         </tr>"""
 
+    # --- TEMPLATE HTML COMPLETO ---
     html_content = f"""
     <!DOCTYPE html>
-    <html>
+    <html lang="it">
     <head>
-        <title>Report NeuroMetric - {video_name}</title>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Report Clinico - {video_name}</title>
         <style>
-            body {{ font-family: 'Segoe UI', sans-serif; margin: 40px; background: #f4f4f9; }}
-            .container {{ max-width: 1000px; margin: 0 auto; background: white; padding: 30px; border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.1); }}
-            h1 {{ color: #2c3e50; border-bottom: 3px solid #3498db; padding-bottom: 10px; }}
-            table {{ width: 100%; border-collapse: collapse; margin-top: 20px; }}
-            th, td {{ padding: 12px; text-align: left; border-bottom: 1px solid #eee; }}
-            th {{ background-color: #34495e; color: white; }}
-            .badge {{ padding: 4px 8px; border-radius: 4px; color: white; font-weight: bold; font-size: 0.8em; }}
-            .TREMORE {{ background-color: #e74c3c; }} .TIC {{ background-color: #f39c12; }}
-            .IPOMIMIA {{ background-color: #9b59b6; }} .PARESI {{ background-color: #34495e; }}
-            .DISCINESIA {{ background-color: #e67e22; }}
-            .NORMALE {{ background-color: #27ae60; }}
-            video {{ border: 1px solid #ddd; border-radius: 4px; }}
+            :root {{
+                --bg-color: #f0f2f5;
+                --card-bg: #ffffff;
+                --text-primary: #1a1a1a;
+                --text-secondary: #65676b;
+                /* Colori Semantici */
+                --color-normale-bg: #dcfce7; --color-normale-text: #166534;
+                --color-tic-bg: #fff7ed;     --color-tic-text: #9a3412;
+                --color-tremore-bg: #fef2f2; --color-tremore-text: #991b1b;
+                --color-discinesia-bg: #eff6ff; --color-discinesia-text: #1e40af;
+                --border-radius: 12px;
+                --shadow-sm: 0 1px 2px rgba(0,0,0,0.05);
+                --shadow-md: 0 4px 6px -1px rgba(0,0,0,0.1);
+            }}
+
+            body {{
+                font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+                background-color: var(--bg-color);
+                margin: 0; padding: 40px 20px; color: var(--text-primary);
+            }}
+
+            .container {{ max-width: 1100px; margin: 0 auto; }}
+
+            header {{ margin-bottom: 30px; display: flex; justify-content: space-between; align-items: center; }}
+            h1 {{ margin: 0; font-size: 24px; color: #2c3e50; }}
+            .subtitle {{ color: var(--text-secondary); margin-top: 5px; font-size: 14px; }}
+            .meta-tag {{ background: #e2e8f0; padding: 6px 12px; border-radius: 6px; font-size: 13px; font-weight: 600; }}
+
+            .stats-grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 20px; margin-bottom: 30px; }}
+            .stat-card {{ background: var(--card-bg); padding: 20px; border-radius: var(--border-radius); box-shadow: var(--shadow-sm); border: 1px solid #e5e7eb; transition: transform 0.2s; }}
+            .stat-card:hover {{ transform: translateY(-2px); box-shadow: var(--shadow-md); }}
+            .stat-label {{ font-size: 13px; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.5px; font-weight: 600; }}
+            .stat-value {{ font-size: 28px; font-weight: 700; margin: 10px 0; color: #333; }}
+            .stat-sub {{ font-size: 13px; display: flex; align-items: center; gap: 5px; }}
+            
+            .card-success .stat-value {{ color: var(--color-normale-text); }}
+            .card-warning .stat-value {{ color: var(--color-tic-text); }}
+
+            .table-wrapper {{ background: var(--card-bg); border-radius: var(--border-radius); box-shadow: var(--shadow-sm); overflow: hidden; border: 1px solid #e5e7eb; }}
+            table {{ width: 100%; border-collapse: collapse; text-align: left; }}
+            th {{ background-color: #f8fafc; color: var(--text-secondary); font-weight: 600; font-size: 13px; text-transform: uppercase; padding: 16px 24px; border-bottom: 2px solid #e2e8f0; }}
+            td {{ padding: 16px 24px; border-bottom: 1px solid #f1f5f9; vertical-align: middle; font-size: 14px; }}
+            tr:last-child td {{ border-bottom: none; }}
+            tr:hover {{ background-color: #f8fafc; }}
+
+            .badge {{ padding: 6px 12px; border-radius: 50px; font-weight: 600; font-size: 12px; display: inline-block; }}
+            .badge-normale {{ background: var(--color-normale-bg); color: var(--color-normale-text); }}
+            .badge-tic {{ background: var(--color-tic-bg); color: var(--color-tic-text); }}
+            .badge-tremore {{ background: var(--color-tremore-bg); color: var(--color-tremore-text); }}
+            .badge-discinesia {{ background: var(--color-discinesia-bg); color: var(--color-discinesia-text); }}
+            .badge-ipomimia {{ background: #f3e8ff; color: #6b21a8; }}
+            .badge-paresi {{ background: #374151; color: #f9fafb; }}
+
+            .video-thumb {{ width: 140px; height: 80px; background-color: #000; border-radius: 8px; overflow: hidden; display: flex; align-items: center; justify-content: center; border: 1px solid #ddd; }}
+            .video-thumb video {{ width: 100%; height: 100%; object-fit: cover; }}
+
+            .confidence-high {{ color: var(--color-normale-text); font-weight: bold; }}
+            .confidence-med {{ color: #d97706; font-weight: bold; }}
+            .zone-tag {{ display: inline-block; background: #f1f5f9; color: #475569; padding: 2px 8px; border-radius: 4px; font-size: 12px; margin: 2px 2px 2px 0; }}
+            .timing {{ font-family: 'Consolas', monospace; color: var(--text-secondary); }}
         </style>
     </head>
     <body>
         <div class="container">
-            <h1>Diagnosi: {video_name}</h1>
-            {stat_html}
-            <h3>Eventi Rilevati</h3>
-            <table>
-                <thead><tr><th>ID</th><th>Sintomo</th><th>Zona</th><th>Inizio</th><th>Durata</th><th>Confidenza</th><th>Clip</th></tr></thead>
-                <tbody>{rows_html}</tbody>
-            </table>
+            <header>
+                <div><h1>Analisi NeuroMetrica</h1><div class="subtitle">File: {video_name} | Data: {date_str}</div></div>
+                <div class="meta-tag">V3.2 AI Enhanced</div>
+            </header>
+
+            <div class="stats-grid">
+                <div class="stat-card card-success"><div class="stat-label">Stato Predominante</div><div class="stat-value">{predom_label}</div><div class="stat-sub"><span>●</span> {predom_perc:.1f}% del tempo totale</div></div>
+                <div class="stat-card card-warning"><div class="stat-label">Tic Rilevati</div><div class="stat-value">{tic_perc:.1f}%</div><div class="stat-sub">{tic_events_count} Eventi critici</div></div>
+                <div class="stat-card"><div class="stat-label">Discinesia</div><div class="stat-value">{disc_perc:.1f}%</div><div class="stat-sub">Movimenti involontari</div></div>
+                <div class="stat-card"><div class="stat-label">Affidabilità Media</div><div class="stat-value">{avg_conf:.1%}</div><div class="stat-sub">Qualità Rilevamento</div></div>
+            </div>
+
+            <div class="table-wrapper">
+                <table>
+                    <thead><tr><th width="5%">ID</th><th width="15%">Sintomo</th><th width="30%">Zona Interessata</th><th width="15%">Timing</th><th width="15%">Confidenza</th><th width="20%">Clip</th></tr></thead>
+                    <tbody>{rows_html}</tbody>
+                </table>
+            </div>
+            
+            <p style="text-align: center; color: #9ca3af; font-size: 12px; margin-top: 30px;">Report generato automaticamente da AI • Validare clinicamente</p>
         </div>
     </body>
     </html>
     """
     with open(filepath, "w", encoding="utf-8") as f: f.write(html_content)
 
-def find_dynamic_zone(buffer, anatomy_map):
-    try:
-        data = np.array(buffer, dtype=np.float32)
-    except:
-        return [], "N/A"
+def find_dynamic_zone(buffer_array, anatomy_map):
+    """
+    Identifica la zona del volto con maggiore varianza (movimento).
+    buffer_array: Deve essere un array Numpy (Sequenza, Features)
+    """
+    # OPTIMIZATION: Evitiamo conversioni inutili se è già array
+    if not isinstance(buffer_array, np.ndarray):
+        try:
+            data = np.array(buffer_array, dtype=np.float32)
+        except:
+            return [], "N/A"
+    else:
+        data = buffer_array
 
     if data.size == 0 or len(data.shape) < 2:
         return [], "Globale"
@@ -135,6 +227,7 @@ def find_dynamic_zone(buffer, anatomy_map):
         if current_idx + n_features > total_features:
             break
             
+        # Calcolo deviazione standard sulla finestra temporale per questa zona
         zone_data = data[:, current_idx : current_idx + n_features]
         movement_score = np.mean(np.std(zone_data, axis=0)) 
         
@@ -254,6 +347,7 @@ def main(video_filename):
             prev_local_lms = current_local_lms.copy()
             prev_nose_pos = current_nose.copy()
             
+            # CONCATENAZIONE V3.2: 250 Features
             frame_features_vector = np.concatenate([
                 current_local_lms.flatten(), 
                 velocity_local.flatten(),
@@ -263,8 +357,14 @@ def main(video_filename):
             buffer.append(frame_features_vector)
 
             if len(buffer) == config.SEQUENCE_LENGTH:
+                # --- OPTIMIZATION FIX: Conversione Diretta ---
+                # 1. Converti in numpy array (Veloce)
                 np_buffer = np.array(buffer, dtype=np.float32)
-                input_tensor = torch.tensor([np_buffer], dtype=torch.float32).to(device)
+                
+                # 2. Converti in Tensore e aggiungi dimensione batch (unsqueeze)
+                # Questo evita il warning "list of arrays" ed è il metodo più rapido
+                input_tensor = torch.tensor(np_buffer, dtype=torch.float32).unsqueeze(0).to(device)
+                
                 with torch.no_grad():
                     out = model(input_tensor)
                     probs = torch.softmax(out, dim=1)
@@ -276,8 +376,10 @@ def main(video_filename):
                 
                 if pred_idx != 0 and current_conf > CONFIDENCE_THRESHOLD:
                     active_anomaly = True
+                    # Per calcolare la zona, usiamo solo le feature di posizione
                     pos_feature_len = len(current_local_lms.flatten())
-                    pos_only_buffer = [f[:pos_feature_len] for f in buffer]
+                    # Slice veloce su numpy
+                    pos_only_buffer = np_buffer[:, :pos_feature_len]
                     zone_indices, current_zone_name = find_dynamic_zone(pos_only_buffer, config.ANATOMY_MAP)
                     
                     if zone_indices:
@@ -289,30 +391,26 @@ def main(video_filename):
 
         # --- LOGICA DI DISEGNO AVANZATA (VISUAL HOLD) ---
         if active_anomaly and box_coords:
-            # Nuova anomalia rilevata: aggiorna grafica e resetta timer
             visual_cooldown = VISUAL_HOLD_FRAMES
             last_box_coords = box_coords
             last_overlay_text = f"{current_label} ({current_conf:.0%}) - {current_zone_name}"
             last_overlay_color = (0, 0, 255) # Rosso
         
         elif visual_cooldown > 0:
-            # Anomalia finita ma siamo nel periodo di "persistenza": mantieni la vecchia grafica
             visual_cooldown -= 1
         
         else:
-            # Nessuna anomalia e timer scaduto: reset a NORMALE
             last_box_coords = None
             last_overlay_text = "NORMALE"
             last_overlay_color = (0, 255, 0) # Verde
 
-        # Disegna usando le variabili "persistenti"
+        # Disegna
         if last_box_coords:
             cv2.rectangle(frame, 
                          (last_box_coords[0], last_box_coords[1]), 
                          (last_box_coords[2], last_box_coords[3]), 
                          last_overlay_color, 2)
             
-            # Sfondo per il testo (migliora leggibilità)
             text_size, _ = cv2.getTextSize(last_overlay_text, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2)
             cv2.rectangle(frame, 
                          (last_box_coords[0], last_box_coords[1] - 25), 
@@ -325,10 +423,7 @@ def main(video_filename):
         else:
             cv2.putText(frame, "NORMALE", (20, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
 
-
-        # --- GESTIONE EVENTI (CLIPS) ---
-        # Nota: La registrazione usa 'active_anomaly' (la verità matematica),
-        # non 'visual_cooldown' (che è solo estetica).
+        # --- GESTIONE CLIP ---
         if active_anomaly:
             patience = 0
             if not is_recording_clip:
@@ -365,7 +460,7 @@ def main(video_filename):
                     current_event["zone"] = " + ".join(unique_zones)
                     current_event["duration"] = duration
                     clip_events.append(current_event)
-                    print(f"  🟢 STOP. Durata: {duration:.1f}s. Zone: {current_event['zone']}")
+                    print(f"  🟢 STOP. Durata: {duration:.1f}s")
                 else:
                     try: os.remove(os.path.join(clips_dir, current_event['filename']))
                     except: pass
@@ -385,7 +480,8 @@ def main(video_filename):
 
     html_file = os.path.join(session_dir, "report_clinico.html")
     generate_html_report(html_file, os.path.basename(video_path), frame_idx, fps, stats_counter, clip_events)
-    print(f"\n✅ REPORT V3.2 GENERATO: {html_file}")
+    print(f"\n✅ REPORT V3.2 GENERATO CON NUOVA GRAFICA: {html_file}")
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Esegui l'inferenza del modello Neurometric su un video.")
