@@ -37,7 +37,7 @@ PATIENCE_FRAMES = 30
 MIN_CLIP_FRAMES = 5   
 
 # --- CONFIGURAZIONE VISIVA ---
-VISUAL_HOLD_FRAMES = 15 
+VISUAL_HOLD_FRAMES = 8 
 
 def create_session_structure(project_root, video_filename):
     base_name = os.path.splitext(os.path.basename(video_filename))[0]
