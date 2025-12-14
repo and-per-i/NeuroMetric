@@ -10,5 +10,4 @@ results/
 *.zip
 *.tar.gz
 *.npy
-*.pth
 
